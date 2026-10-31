@@ -2,11 +2,13 @@
 // synchronize-panes. While this window has the keyboard, each key goes to
 // all of them: named keys through `hc keys`, text it can't name (shifted
 // symbols, non-ASCII) through the clipboard and `terminal.paste` on each pane
-// (macOS: pbpaste/osascript). Cmd-V pastes the clipboard to all.
+// (macOS: osascript). Cmd-V pastes the clipboard to all.
 //
-// It sticks to the tab it was opened in: showing another tab ends it, and
-// queued keys never reach a different tab. A failed send drops what's still
-// queued and holds input until the pill is clicked. <prefix> <key> runs that
+// What it shows is what it sends: keys are only sent while the pill says
+// Sync. Pausing (the keyboard went elsewhere), stopping, leaving the tab, a
+// change in which panes are targeted and a failed send all drop what's
+// still queued; a send already handed to hc can't be called back. A failed
+// send also holds input until the pill is clicked. <prefix> <key> runs that
 // key's binding from keys.json instead of typing it; the prefix is read from
 // the binding of sync-panes.stop. Opened with mod.open:sync-panes; the stop
 // binding or the ✕ closes it.
@@ -21,7 +23,8 @@ const LABEL = {
   none: "No terminals",
   failed: (who) => `Failed ${who} · click to resume`,
   failedTitle: "Sync panes stopped sending",
-  clipboard: "Cannot read the clipboard",
+  tooBig: "The clipboard is too large to put back (an image?); symbols weren't sent so it isn't lost",
+  badSend: "This send: binding has characters that can't be typed; nothing was sent",
 };
 
 // Characters `hc keys` takes as they are.
@@ -32,6 +35,9 @@ const NAMED = {
   up: "up", down: "down", left: "left", right: "right", home: "home", end: "end",
   pageup: "pageup", pagedown: "pagedown", delete: "delete", insert: "insert",
 };
+// After moving focus for a paste, the pill takes a moment to have the
+// keyboard again; don't call that a pause.
+const PASTE_SETTLE_MS = 500;
 
 // One key as an hc key name, or null when hc can't name it.
 function keyName(base) {
@@ -42,19 +48,26 @@ function keyName(base) {
   return null;
 }
 
-// The prefix: the first chord of sync-panes.stop's binding ("ctrl-t shift-e"
-// -> "ctrl-t"), or null when it isn't bound to a two-key sequence.
-function prefixKey() {
-  const b = keys().find((k) => k.action === "sync-panes.stop" && k.keys.includes(" "));
-  return b ? b.keys.split(" ")[0].toLowerCase() : null;
+// keys.json sections that apply while the pill has the keyboard, most
+// specific first.
+function sections() {
+  return ["mod:sync-panes", `layout:${shared("layout")}`, "global"];
 }
 
-// What `<prefix> <key>` does here: the most specific binding that would
-// apply outside a terminal.
+// The prefix: the first chord of sync-panes.stop's two-chord binding in the
+// sections that apply ("ctrl-t shift-e" -> "ctrl-t"), or null.
+function prefixKey() {
+  for (const section of sections()) {
+    const b = keys().find((k) => k.section === section && k.action === "sync-panes.stop" && k.keys.trim().split(/\s+/).length === 2);
+    if (b) return b.keys.trim().split(/\s+/)[0].toLowerCase();
+  }
+  return null;
+}
+
+// What `<prefix> <key>` does here: the most specific binding that applies.
 function bindingFor(chord) {
-  const order = ["mod:sync-panes", `layout:${shared("layout")}`, "global"];
-  for (const section of order) {
-    const b = keys().find((k) => k.section === section && k.keys.toLowerCase() === chord);
+  for (const section of sections()) {
+    const b = keys().find((k) => k.section === section && k.keys.trim().toLowerCase() === chord);
     if (b) return b.action;
   }
   return null;
@@ -69,6 +82,25 @@ function runAction(action) {
   run(name, arg ? { [arg]: /^\d+$/.test(value) ? Number(value) : value } : {});
 }
 
+// A send: binding's text as queue items, or null when any character can't
+// be typed faithfully (NUL, ctrl+\ ] ^ _, DEL): then nothing is sent.
+function sendItems(text) {
+  const out = [];
+  for (const ch of text) {
+    const code = ch.codePointAt(0);
+    if (ch === "\r" || ch === "\n") out.push({ keys: ["enter"] });
+    else if (ch === "\t") out.push({ keys: ["tab"] });
+    else if (ch === "\u001b") out.push({ keys: ["esc"] });
+    else if (code >= 1 && code <= 26) out.push({ keys: ["ctrl+" + String.fromCharCode(code + 96)] });
+    else if (code < 32 || code === 127) return null;
+    else {
+      const name = keyName(ch);
+      out.push(name ? { keys: [name] } : { text: ch });
+    }
+  }
+  return out;
+}
+
 // hc's message from a failed run (it prints {"error": {"message"}}).
 function failure(r) {
   const out = (r.stderr || r.stdout || "").trim();
@@ -77,22 +109,24 @@ function failure(r) {
 
 export default class SyncPanes extends View {
   init(_props, cx) {
-    const f = focused();
-    this.tab = f?.tab ?? null;
-    this.openPane = f?.pane ?? null;
+    this.tab = focused()?.tab ?? null;
     this.queue = [];
+    this.gen = 0;
     this.busy = false;
-    this.pending = false;
+    this.pending = null;
     this.stopped = false;
     this.error = null;
+    this.wasLive = false;
+    this.quietUntil = 0;
+    this.lastTo = null;
     this.handle = cx.focus_handle();
     this.handle.focus();
-    // Take the keyboard again unless the person moved on in the meantime.
+    // One more try if the first didn't take, unless the pill has already
+    // had the keyboard: then wherever it went was the person's choice.
     cx.timer.after(300, () => {
-      if (!this.handle.is_focused() && focused()?.pane === this.openPane) this.handle.focus();
+      if (!this.wasLive && !this.stopped) this.handle.focus();
     });
-    // Leaving the tab ends it; render notices too, this covers no redraws.
-    cx.timer.every(300, () => this.checkTab());
+    cx.timer.every(300, () => this.watch());
     cx.spawn(async (cx) => {
       for (;;) {
         if ((await nextCommand()) === "stop") this.stop();
@@ -103,26 +137,51 @@ export default class SyncPanes extends View {
 
   async close() {
     this.stopped = true;
-    this.queue = [];
+    this.drop();
   }
 
-  // The tab's terminal panes, or only the zoomed one: like tmux, panes you
-  // can't see don't get keys.
+  // The tab's terminal panes. When a pane is zoomed, only it counts, and
+  // only if it's a terminal: like tmux, panes you can't see don't get keys.
   targets() {
-    const ps = panes().filter((p) => p.tab === this.tab && p.terminal);
-    const zoomed = ps.filter((p) => p.zoomed);
-    return zoomed.length ? zoomed : ps;
+    const ps = panes().filter((p) => p.tab === this.tab);
+    const zoomed = ps.find((p) => p.zoomed);
+    if (zoomed) return zoomed.terminal ? [zoomed] : [];
+    return ps.filter((p) => p.terminal);
   }
 
-  checkTab() {
+  // Forgets everything queued and any half-typed prefix; sends in flight
+  // see the new generation and don't go on.
+  drop() {
+    this.gen++;
+    this.queue = [];
+    this.pending = null;
+  }
+
+  // Still sending what generation `gen` queued?
+  alive(gen) {
+    return !this.stopped && gen === this.gen && focused()?.tab === this.tab;
+  }
+
+  // Leaving the tab stops; losing the keyboard or a change in the target
+  // panes drops what's queued. Runs on a timer and on every render.
+  watch() {
+    if (this.stopped) return;
     const tab = focused()?.tab;
-    if (!this.stopped && tab && tab !== this.tab) this.stop();
+    if (tab && tab !== this.tab) return this.stop();
+    if (this.handle.is_focused()) this.wasLive = true;
+    else if (this.wasLive && Date.now() > this.quietUntil) {
+      this.wasLive = false;
+      this.drop();
+    }
+    const to = this.targets().map((p) => p.terminal).join(" ");
+    if (this.lastTo !== null && to !== this.lastTo) this.drop();
+    this.lastTo = to;
   }
 
   stop() {
     if (this.stopped) return;
     this.stopped = true;
-    this.queue = [];
+    this.drop();
     closeOverlay(props().overlay);
   }
 
@@ -151,12 +210,13 @@ export default class SyncPanes extends View {
     if (this.stopped) return;
     const stroke = e.keystroke.toLowerCase();
     if (this.pending) {
-      this.pending = false;
-      return this.prefixed(stroke, cx);
+      const prefix = this.pending;
+      this.pending = null;
+      return this.prefixed(prefix, stroke, cx);
     }
     const prefix = prefixKey();
     if (prefix && stroke === prefix) {
-      this.pending = true;
+      this.pending = prefix;
       return;
     }
     // After a failure nothing is typed until the pill is clicked.
@@ -170,40 +230,34 @@ export default class SyncPanes extends View {
   }
 
   // <prefix> <key>: that key's binding, as tmux runs its command instead of
-  // sending the key. An unbound key does nothing.
-  prefixed(stroke, cx) {
+  // sending the key. An unbound key does nothing, and so does `terminal`
+  // (it means "let the program have the key", and there's no program here).
+  prefixed(prefix, stroke, cx) {
     if (stroke === "escape") return;
-    const action = bindingFor(`${prefixKey()} ${stroke}`);
-    if (!action || action.startsWith("mod.open:sync-panes")) return;
+    const action = bindingFor(`${prefix} ${stroke}`);
+    if (!action || action === "terminal" || action.startsWith("mod.open:sync-panes")) return;
     if (action === "sync-panes.stop") return this.stop();
     if (action.startsWith("send:")) {
-      if (!this.error) this.pushSend(action.slice(5), cx);
+      if (this.error) return;
+      const items = sendItems(action.slice(5));
+      if (!items) return notify({ title: LABEL.failedTitle, body: LABEL.badSend, level: "warning" });
+      for (const item of items) this.push(item, cx);
       return;
     }
     runAction(action);
   }
 
-  // A send: binding's text (e.g. "\u0014", a literal prefix) to every terminal.
-  pushSend(text, cx) {
-    for (const ch of text) {
-      const code = ch.charCodeAt(0);
-      if (ch === "\r") this.push({ keys: ["enter"] }, cx);
-      else if (ch === "\u001b") this.push({ keys: ["esc"] }, cx);
-      else if (code >= 1 && code <= 26) this.push({ keys: ["ctrl+" + String.fromCharCode(code + 96)] }, cx);
-      else {
-        const name = keyName(ch);
-        this.push(name ? { keys: [name] } : { text: ch }, cx);
-      }
-    }
-  }
-
   // Queues an item for the panes there are now, merging it into the last
   // one of its kind when it goes to the same panes.
   push(item, cx) {
+    // Catch up first, so a change in panes drops older items, not this one.
+    this.watch();
+    if (this.stopped) return;
     const targets = this.targets();
     if (!targets.length) return;
     item.targets = targets;
     item.to = targets.map((p) => p.terminal).join(" ");
+    item.gen = this.gen;
     const last = this.queue[this.queue.length - 1];
     if (last && last.to === item.to && item.keys && last.keys) last.keys.push(...item.keys);
     else if (last && last.to === item.to && item.text != null && last.text != null) last.text += item.text;
@@ -217,12 +271,12 @@ export default class SyncPanes extends View {
     cx.spawn(async (cx) => {
       try {
         while (this.queue.length && !this.stopped) {
-          this.checkTab();
-          if (this.stopped) break;
+          this.watch();
           const item = this.queue.shift();
+          if (!item || !this.alive(item.gen)) continue;
           if (item.keys) await this.sendKeys(item.targets, item.keys);
           else if (item.paste) this.pasteEach(item.targets);
-          else await this.sendText(item.targets, item.text);
+          else await this.sendText(item.targets, item.text, item.gen);
         }
       } catch (err) {
         this.fail([], String(err?.message ?? err));
@@ -236,35 +290,49 @@ export default class SyncPanes extends View {
   // Stops typing: what's queued is dropped (a trailing Enter must not run a
   // half-typed command anywhere) and input waits for a click on the pill.
   fail(terminals, message) {
-    this.queue = [];
+    this.drop();
     this.error = { terminals, message: message || "send failed" };
     notify({ title: LABEL.failedTitle, body: `${terminals.join(", ")} ${this.error.message}`.trim(), level: "error" });
   }
 
+  // Waits for every target to answer, failed or not, before the next batch.
   async sendKeys(targets, names) {
-    const results = await Promise.all(targets.map((p) => hc(["keys", p.terminal, ...names])));
-    const bad = targets.filter((_p, i) => results[i].code !== 0);
-    if (bad.length) this.fail(bad.map((p) => p.terminal), failure(results[targets.indexOf(bad[0])]));
+    const settled = await Promise.allSettled(targets.map((p) => hc(["keys", p.terminal, ...names])));
+    const bad = [];
+    let message = "";
+    settled.forEach((s, i) => {
+      const r = s.status === "fulfilled" ? s.value : null;
+      if (r && r.code === 0) return;
+      bad.push(targets[i].terminal);
+      message ||= r ? failure(r) : String(s.reason?.message ?? s.reason);
+    });
+    if (bad.length) this.fail(bad, message);
   }
 
   // Text hc keys can't name: on the clipboard, pasted into each pane, then
-  // the clipboard is put back, unless something else was copied meanwhile.
-  // Both writes are marked transient and concealed, so clipboard managers
-  // don't keep what was typed.
-  async sendText(targets, text) {
-    const saved = await exec("pbpaste", []);
-    if (saved.code !== 0) throw new Error(LABEL.clipboard);
-    const ours = await copy(text);
+  // the clipboard is put back, every type it held (rich text too). Saving
+  // and setting happen in one osascript, and so do checking and restoring,
+  // which keeps the window in which a copy of yours could be overwritten
+  // small, but not zero. A clipboard too large to carry back (images) is
+  // never touched: the symbols aren't sent.
+  async sendText(targets, text, gen) {
+    const r = await clip(SAVE_AND_SET, { SYNC_PANES_TEXT: text });
+    if (r === "TOOBIG") throw new Error(LABEL.tooBig);
+    const { saved, count } = JSON.parse(r);
     try {
-      this.pasteEach(targets);
+      if (this.alive(gen)) this.pasteEach(targets);
     } finally {
-      if ((await changeCount()) === ours) await copy(saved.stdout);
+      await clip(RESTORE, { SYNC_PANES_SAVED: JSON.stringify(saved), SYNC_PANES_COUNT: String(count) });
     }
   }
 
+  // Pastes into each pane in turn; run() doesn't report whether a paste
+  // landed. Focus goes back to where it was, and the pill gets the keyboard
+  // back only if it had it.
   pasteEach(targets) {
     const back = focused()?.pane;
     const live = this.handle.is_focused();
+    this.quietUntil = Date.now() + PASTE_SETTLE_MS;
     try {
       for (const p of targets) {
         run("pane.focus", { pane: p.pane });
@@ -278,13 +346,14 @@ export default class SyncPanes extends View {
 
   resume() {
     this.error = null;
+    this.pending = null;
     this.handle.focus();
   }
 
   // A small pill: it has to hold the keyboard, so it can't go away, but it
   // stays out of the way. Drag it anywhere; the window remembers the spot.
   render() {
-    this.checkTab();
+    this.watch();
     const t = theme();
     const n = this.targets().length;
     const live = this.handle.is_focused();
@@ -309,28 +378,53 @@ export default class SyncPanes extends View {
   }
 }
 
-// Puts text on the clipboard with the nspasteboard.org markers clipboard
-// managers honor: don't record it (Transient) and don't show it (Concealed).
-// The text travels in an environment variable, never as an argument, so
-// clipboard contents can't be read as osascript options. Prints the
-// clipboard's change count after the write.
-const COPY = `ObjC.import("AppKit");
-const text = $.NSProcessInfo.processInfo.environment.objectForKey("SYNC_PANES_TEXT");
-const pb = $.NSPasteboard.generalPasteboard;
-pb.clearContents;
-pb.setStringForType(text.isNil() ? "" : text, "public.utf8-plain-text");
-pb.setStringForType("", "org.nspasteboard.TransientType");
-pb.setStringForType("", "org.nspasteboard.ConcealedType");
-pb.changeCount;`;
-const COUNT = `ObjC.import("AppKit"); $.NSPasteboard.generalPasteboard.changeCount;`;
+// Clipboard scripts (JXA). Values travel in environment variables, never as
+// arguments, so clipboard contents can't be read as osascript options.
+// Typed text is marked with the nspasteboard.org Transient and Concealed
+// markers, so clipboard managers don't record or show it; the restored
+// contents are marked Transient so they aren't recorded twice. Saved
+// contents are every type's data, base64, at most SAVE_LIMIT characters in
+// all: environment variables can't carry much more.
+const SAVE_LIMIT = 400000;
+const MARKERS = ["org.nspasteboard.TransientType", "org.nspasteboard.ConcealedType"];
+const SAVE_AND_SET = `function run() {
+  ObjC.import("AppKit");
+  const env = $.NSProcessInfo.processInfo.environment;
+  const pb = $.NSPasteboard.generalPasteboard;
+  const markers = ${JSON.stringify(MARKERS)};
+  const saved = [];
+  let size = 0;
+  for (const type of ObjC.deepUnwrap(pb.types) || []) {
+    if (markers.includes(type)) continue;
+    const data = pb.dataForType(type);
+    if (data.isNil()) continue;
+    const b64 = data.base64EncodedStringWithOptions(0).js;
+    size += b64.length + type.length;
+    if (size > ${SAVE_LIMIT}) return "TOOBIG";
+    saved.push([type, b64]);
+  }
+  pb.clearContents;
+  pb.setStringForType(env.objectForKey("SYNC_PANES_TEXT"), "public.utf8-plain-text");
+  for (const m of markers) pb.setStringForType("", m);
+  return JSON.stringify({ saved, count: pb.changeCount });
+}`;
+const RESTORE = `function run() {
+  ObjC.import("AppKit");
+  const env = $.NSProcessInfo.processInfo.environment;
+  const pb = $.NSPasteboard.generalPasteboard;
+  if (String(pb.changeCount) !== env.objectForKey("SYNC_PANES_COUNT").js) return "changed";
+  const saved = JSON.parse(env.objectForKey("SYNC_PANES_SAVED").js);
+  pb.clearContents;
+  if (!saved.length) return "restored";
+  pb.declareTypesOwner(saved.map((s) => s[0]).concat(["${MARKERS[0]}"]), null);
+  for (const [type, b64] of saved) pb.setDataForType($.NSData.alloc.initWithBase64EncodedStringOptions(b64, 0), type);
+  pb.setStringForType("", "${MARKERS[0]}");
+  return "restored";
+}`;
 
-async function copy(text) {
-  const r = await exec("/usr/bin/env", [`SYNC_PANES_TEXT=${text}`, "osascript", "-l", "JavaScript", "-e", COPY]);
-  if (r.code !== 0) throw new Error(r.stderr.trim() || "Cannot set the clipboard");
-  return Number(r.stdout.trim());
-}
-
-async function changeCount() {
-  const r = await exec("osascript", ["-l", "JavaScript", "-e", COUNT]);
-  return r.code === 0 ? Number(r.stdout.trim()) : NaN;
+async function clip(script, vars) {
+  const assigns = Object.entries(vars).map(([k, v]) => `${k}=${v}`);
+  const r = await exec("/usr/bin/env", [...assigns, "osascript", "-l", "JavaScript", "-e", script]);
+  if (r.code !== 0) throw new Error(r.stderr.trim() || "Cannot use the clipboard");
+  return r.stdout.trim();
 }
