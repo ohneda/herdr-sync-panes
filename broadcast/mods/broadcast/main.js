@@ -185,15 +185,16 @@ export default class Broadcast extends View {
 
 // Puts text on the clipboard with the nspasteboard.org markers clipboard
 // managers honor: don't record it (Transient) and don't show it (Concealed).
-const COPY = `function run(argv) {
-  ObjC.import("AppKit");
-  const pb = $.NSPasteboard.generalPasteboard;
-  pb.clearContents;
-  pb.setStringForType(argv[0], "public.utf8-plain-text");
-  pb.setStringForType("", "org.nspasteboard.TransientType");
-  pb.setStringForType("", "org.nspasteboard.ConcealedType");
-}`;
+// The text travels in an environment variable, never as an argument, so
+// clipboard contents can't be read as osascript options.
+const COPY = `ObjC.import("AppKit");
+const text = $.NSProcessInfo.processInfo.environment.objectForKey("BROADCAST_TEXT");
+const pb = $.NSPasteboard.generalPasteboard;
+pb.clearContents;
+pb.setStringForType(text.isNil() ? "" : text, "public.utf8-plain-text");
+pb.setStringForType("", "org.nspasteboard.TransientType");
+pb.setStringForType("", "org.nspasteboard.ConcealedType");`;
 async function copy(text) {
-  const r = await exec("osascript", ["-l", "JavaScript", "-e", COPY, text]);
+  const r = await exec("/usr/bin/env", [`BROADCAST_TEXT=${text}`, "osascript", "-l", "JavaScript", "-e", COPY]);
   if (r.code !== 0) throw new Error(r.stderr.trim() || "Cannot set the clipboard");
 }

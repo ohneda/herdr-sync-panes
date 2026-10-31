@@ -43,7 +43,7 @@ This file is the brief: enough to build Broadcast from an empty folder. The file
 - **A focusable view**: `cx.focus_handle()`, focused in `init` and again after 300 ms, with `track_focus` and `on_key_down` on the pill's root; `handle.is_focused()` decides Sync vs Paused.
 - **Targets:** `panes()` filtered to `focused().tab` with a `terminal`.
 - **Named keys:** `hc(["keys", terminal, ...names])` for every target in parallel. Key events are translated from GPUI (`escape` → `esc`, uppercase → `shift+a`, `ctrl`/`alt`/`shift` joined with `+`). Keys are queued and merged so a fast typist sends batches, one batch at a time, in order.
-- **Text and paste:** `exec("pbpaste")` saves the clipboard; a short JXA script run with `exec("osascript", ["-l", "JavaScript", "-e", script, text])` sets it through `NSPasteboard` with `org.nspasteboard.TransientType` and `org.nspasteboard.ConcealedType`; then `run("pane.focus", {pane})` + `run("terminal.paste")` for each target, `pane.focus` back, the pill refocused, and the saved text restored in a `finally`.
+- **Text and paste:** `exec("pbpaste")` saves the clipboard; a short JXA script run with `exec("/usr/bin/env", ["BROADCAST_TEXT=" + text, "osascript", "-l", "JavaScript", "-e", script])` sets it (the text goes in the environment, never as an argument, so clipboard contents starting with `-` can't become osascript options) through `NSPasteboard` with `org.nspasteboard.TransientType` and `org.nspasteboard.ConcealedType`; then `run("pane.focus", {pane})` + `run("terminal.paste")` for each target, `pane.focus` back, the pill refocused, and the saved text restored in a `finally`.
 - `PREFIX` / `PREFIX_HC` at the top of `main.js` are the customization point for another prefix.
 
 ## Watch out
