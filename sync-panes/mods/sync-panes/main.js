@@ -1,7 +1,7 @@
 // Types the same input into every terminal of one tab, like tmux's
 // synchronize-panes. While this window has the keyboard, each key goes to
 // all of them through send.py, which attaches to each terminal and types
-// the bytes the key sends there (python3). It never touches the clipboard or
+// the bytes the key sends there (Python 3). It never touches the clipboard or
 // focus, and doesn't wait for the quiet `hc keys` keeps after a person types.
 // Cmd-V pastes the clipboard to all with `terminal.paste` on each pane.
 //
@@ -16,7 +16,7 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { exec, appHome, writeTextFile, run, panes, focused, spaces, keys, commands, shared, theme, props, closeOverlay, notify, nextCommand } from "herdr";
+import { exec, appHome, writeTextFile, run, panes, focused, spaces, keys, commands, shared, theme, props, closeOverlay, notify, nextCommand, window } from "herdr";
 
 const LABEL = {
   sync: (n, tab) => `Sync ${n} · ${tab}`,
@@ -25,6 +25,7 @@ const LABEL = {
   failed: (who) => `Failed ${who} · click to resume`,
   failedTitle: "Sync panes stopped sending",
   badSend: "This send: binding has characters that can't be typed; nothing was sent",
+  noPython: "send.py needs Python 3, and none was found (python3, python, py -3)",
 };
 
 // GPUI key names -> send.py key names, where they differ.
@@ -42,6 +43,12 @@ const BATCH = 256;
 // these delays, and losing it meanwhile isn't called a pause.
 const REGAIN_MS = [30, 120, 300];
 const SETTLE_MS = 500;
+
+// Ways to start Python 3, in the order tried. On Windows `py -3` goes
+// first: `python3` there may be the Store's stand-in, which opens the Store.
+function pythons() {
+  return window().platform === "windows" ? [["py", "-3"], ["python"], ["python3"]] : [["python3"], ["python"]];
+}
 
 // One key as a send.py key name, or null when it has none.
 function keyName(base) {
@@ -149,7 +156,10 @@ export default class SyncPanes extends View {
   async close() {
     this.stopped = true;
     this.drop();
-    if (this.inbox) await exec("rm", ["-rf", this.inbox]);
+    if (this.inbox) {
+      const [cmd, ...pre] = this.python;
+      await exec(cmd, [...pre, "-I", "-c", "import shutil, sys; shutil.rmtree(sys.argv[1], True)", this.inbox]);
+    }
   }
 
   // The tab's terminal panes. When a pane is zoomed, only it counts, and
@@ -349,13 +359,20 @@ export default class SyncPanes extends View {
   async send(targets, input) {
     const terminals = targets.map((p) => p.terminal);
     if (!this.inbox) {
-      const m = await exec("python3", ["-I", "-c", "import tempfile; print(tempfile.mkdtemp(prefix='sync-panes-'))"]);
-      if (m.code !== 0 || !m.stdout.trim()) return this.fail(terminals, m.stderr.trim() || "python3 can't make a folder for send.py");
-      this.inbox = m.stdout.trim();
+      // The first Python that runs (-I rules out Python 2) makes the folder.
+      for (const [cmd, ...pre] of pythons()) {
+        const m = await exec(cmd, [...pre, "-I", "-c", "import tempfile; print(tempfile.mkdtemp(prefix='sync-panes-'))"]).catch(() => null);
+        if (m?.code !== 0 || !m.stdout.trim()) continue;
+        this.python = [cmd, ...pre];
+        this.inbox = m.stdout.trim();
+        break;
+      }
+      if (!this.inbox) return this.fail(terminals, LABEL.noPython);
     }
     const file = `${this.inbox}/${this.sends = (this.sends ?? 0) + 1}.json`;
     await writeTextFile(file, JSON.stringify({ terminals, input }), null);
-    const r = await exec("python3", ["-I", `${appHome()}/mods/sync-panes/send.py`, file]);
+    const [cmd, ...pre] = this.python;
+    const r = await exec(cmd, [...pre, "-I", `${appHome()}/mods/sync-panes/send.py`, file]);
     let report = null;
     try { report = JSON.parse(r.stdout); } catch {}
     if (r.code !== 0 || !report) return this.fail(terminals, (r.stderr || r.stdout).trim().split("\n").pop() || `send.py exited ${r.code}`);
