@@ -18,7 +18,7 @@ This file is the brief: enough to build Broadcast from an empty folder. The file
 
 - `ctrl-t e` opens the pill and gives it the keyboard. Every key you type goes to every terminal pane of the shown tab, in order, as you type it. The tab is read again for each batch, so switching tabs changes where keys go.
 - Letters, digits, unshifted ASCII punctuation, Enter, Tab, Backspace, Escape, arrows, Home/End, Page Up/Down, Delete, Insert, F1–F12 and Ctrl/Alt combinations of those go out as named keys.
-- Anything else that types a character (shifted symbols like `!`, `"`, `|`, `:`, and non-ASCII) is pasted into each pane: the clipboard is saved, the text is put on it, each pane is focused and pasted into, focus goes back, and the clipboard text is restored.
+- Anything else that types a character (shifted symbols like `!`, `"`, `|`, `:`, and non-ASCII) is pasted into each pane: the clipboard is saved, the text is put on it, each pane is focused and pasted into, focus goes back, and the clipboard text is restored, even if a paste fails. Both clipboard writes carry the nspasteboard.org Transient and Concealed markers, so clipboard managers don't record what you typed.
 - Cmd-V pastes the clipboard into every pane.
 - Other Cmd shortcuts are ignored. IME composition doesn't reach it; paste Japanese and other composed text with Cmd-V.
 - Clicking a terminal takes the keyboard back: the pill shows "Paused" and keys go only to that terminal. Clicking the pill resumes.
@@ -43,15 +43,15 @@ This file is the brief: enough to build Broadcast from an empty folder. The file
 - **A focusable view**: `cx.focus_handle()`, focused in `init` and again after 300 ms, with `track_focus` and `on_key_down` on the pill's root; `handle.is_focused()` decides Sync vs Paused.
 - **Targets:** `panes()` filtered to `focused().tab` with a `terminal`.
 - **Named keys:** `hc(["keys", terminal, ...names])` for every target in parallel. Key events are translated from GPUI (`escape` → `esc`, uppercase → `shift+a`, `ctrl`/`alt`/`shift` joined with `+`). Keys are queued and merged so a fast typist sends batches, one batch at a time, in order.
-- **Text and paste:** `exec("pbpaste")` and `exec("sh", ["-c", 'printf %s "$1" | pbcopy', "sh", text])` around `run("pane.focus", {pane})` + `run("terminal.paste")` for each target, then `pane.focus` back and the pill refocused.
+- **Text and paste:** `exec("pbpaste")` saves the clipboard; a short JXA script run with `exec("osascript", ["-l", "JavaScript", "-e", script, text])` sets it through `NSPasteboard` with `org.nspasteboard.TransientType` and `org.nspasteboard.ConcealedType`; then `run("pane.focus", {pane})` + `run("terminal.paste")` for each target, `pane.focus` back, the pill refocused, and the saved text restored in a `finally`.
 - `PREFIX` / `PREFIX_HC` at the top of `main.js` are the customization point for another prefix.
 
 ## Watch out
 
 - `hc keys` takes only named keys: `!`, `"`, `~`, `:` and other shifted symbols are refused, uppercase letters arrive lowercase unless sent as `shift+<letter>`, and `shift+1` types `1`. That's why those go through the clipboard. Don't route all text through `hc send`: it always presses Enter and waits for ~3 s of quiet.
 - `hc attach` with piped input doesn't work, and the framed attach stream resizes the terminal, so there is no raw-bytes path from a mod.
-- The clipboard path is macOS-only (`pbcopy`, `pbpaste`) and briefly replaces the clipboard; non-text clipboard contents are not restored.
-- The mod runs `hc`, `pbcopy`, `pbpaste` and `sh` through `exec`. It reads no files and reaches no network.
+- The clipboard path is macOS-only (`pbpaste`, `osascript`) and briefly replaces the clipboard; non-text clipboard contents are not restored. Clipboard managers that ignore the nspasteboard.org markers may still see the typed characters: don't type secrets while broadcasting.
+- The mod runs `hc`, `pbpaste` and `osascript` through `exec`. It reads no files and reaches no network.
 - A mod only sees keys while it has focus; there is no API to tap a terminal's own input. That is why the pill must exist while broadcasting.
 - `ctrl-t` is this build's prefix. If your prefix differs, change the `keys.json` snippet and `PREFIX` / `PREFIX_HC` together.
 - `at: {x: 600, y: 3}` assumes the default `main` layout's tab bar; move it in `mod.json` or drag it once for other layouts.
@@ -62,7 +62,7 @@ This file is the brief: enough to build Broadcast from an empty folder. The file
 - `herdr-app check mods/broadcast` passes.
 - With two shells split in one tab, `ctrl-t e` shows "Sync 2" and typing `ls | grep "a"` + Enter runs the same command in both.
 - Arrows, Ctrl+C, Backspace and Tab reach both shells.
-- After a symbol is sent, the clipboard's previous text is back.
+- After a symbol is sent, the clipboard's previous text is back, and a clipboard manager's history doesn't show the symbol.
 - Cmd-V pastes the clipboard into both.
 - Clicking a terminal shows "Paused"; clicking the pill shows "Sync 2" again.
 - `ctrl-t shift-e` and the ✕ both close the pill, and normal typing goes to one terminal again.

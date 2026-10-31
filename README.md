@@ -23,7 +23,7 @@ Then merge [`broadcast/keys.json`](broadcast/keys.json) into `~/.config/herdr-ap
 
 ## What it runs
 
-The mod runs `hc keys` to type into terminals, and `pbcopy` / `pbpaste` (macOS) to paste characters `hc keys` can't name (shifted symbols, non-ASCII). It reads no files and makes no network requests.
+The mod runs `hc keys` to type into terminals. Characters `hc keys` can't name (shifted symbols, non-ASCII) go through the clipboard (macOS: `pbpaste`, `osascript`): it's marked Transient/Concealed so clipboard managers skip it, and your previous clipboard text is restored. Avoid typing secrets while broadcasting. It reads no files and makes no network requests.
 
 ## License
 

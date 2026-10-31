@@ -1,7 +1,7 @@
 // Types the same input into every terminal of the shown tab. While this
 // window has the keyboard, each key goes to all of them: named keys through
 // `hc keys`, text it can't name (shifted symbols, non-ASCII) through the
-// clipboard and `terminal.paste` on each pane (macOS: pbcopy/pbpaste). Cmd-V
+// clipboard and `terminal.paste` on each pane (macOS: pbpaste/osascript). Cmd-V
 // pastes the clipboard to all. Opened with <prefix> e (mod.open:broadcast);
 // <prefix> shift-e or the ✕ closes it (broadcast.stop).
 
@@ -139,12 +139,16 @@ export default class Broadcast extends View {
   }
 
   // Text hc keys can't name: on the clipboard, pasted into each pane, then
-  // the clipboard is put back.
+  // the clipboard is put back. Both writes are marked transient and
+  // concealed, so clipboard managers don't keep what was typed.
   async sendText(targets, text) {
     const saved = (await exec("pbpaste", [])).stdout;
-    await copy(text);
-    this.pasteEach(targets);
-    await copy(saved);
+    try {
+      await copy(text);
+      this.pasteEach(targets);
+    } finally {
+      await copy(saved);
+    }
   }
 
   pasteEach(targets) {
@@ -179,6 +183,17 @@ export default class Broadcast extends View {
   }
 }
 
-function copy(text) {
-  return exec("sh", ["-c", 'printf %s "$1" | pbcopy', "sh", text]);
+// Puts text on the clipboard with the nspasteboard.org markers clipboard
+// managers honor: don't record it (Transient) and don't show it (Concealed).
+const COPY = `function run(argv) {
+  ObjC.import("AppKit");
+  const pb = $.NSPasteboard.generalPasteboard;
+  pb.clearContents;
+  pb.setStringForType(argv[0], "public.utf8-plain-text");
+  pb.setStringForType("", "org.nspasteboard.TransientType");
+  pb.setStringForType("", "org.nspasteboard.ConcealedType");
+}`;
+async function copy(text) {
+  const r = await exec("osascript", ["-l", "JavaScript", "-e", COPY, text]);
+  if (r.code !== 0) throw new Error(r.stderr.trim() || "Cannot set the clipboard");
 }
