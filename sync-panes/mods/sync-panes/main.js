@@ -8,7 +8,7 @@
 // queued keys never reach a different tab. A failed send drops what's still
 // queued and holds input until the pill is clicked. <prefix> <key> runs that
 // key's binding from keys.json instead of typing it; the prefix is read from
-// the binding of broadcast.stop. Opened with mod.open:broadcast; the stop
+// the binding of sync-panes.stop. Opened with mod.open:sync-panes; the stop
 // binding or the ✕ closes it.
 
 import { View, div } from "gpui-kit";
@@ -20,7 +20,7 @@ const LABEL = {
   paused: "Paused",
   none: "No terminals",
   failed: (who) => `Failed ${who} · click to resume`,
-  failedTitle: "Broadcast stopped sending",
+  failedTitle: "Sync panes stopped sending",
   clipboard: "Cannot read the clipboard",
 };
 
@@ -42,17 +42,17 @@ function keyName(base) {
   return null;
 }
 
-// The prefix: the first chord of broadcast.stop's binding ("ctrl-t shift-e"
+// The prefix: the first chord of sync-panes.stop's binding ("ctrl-t shift-e"
 // -> "ctrl-t"), or null when it isn't bound to a two-key sequence.
 function prefixKey() {
-  const b = keys().find((k) => k.action === "broadcast.stop" && k.keys.includes(" "));
+  const b = keys().find((k) => k.action === "sync-panes.stop" && k.keys.includes(" "));
   return b ? b.keys.split(" ")[0].toLowerCase() : null;
 }
 
 // What `<prefix> <key>` does here: the most specific binding that would
 // apply outside a terminal.
 function bindingFor(chord) {
-  const order = ["mod:broadcast", `layout:${shared("layout")}`, "global"];
+  const order = ["mod:sync-panes", `layout:${shared("layout")}`, "global"];
   for (const section of order) {
     const b = keys().find((k) => k.section === section && k.keys.toLowerCase() === chord);
     if (b) return b.action;
@@ -75,7 +75,7 @@ function failure(r) {
   try { return JSON.parse(out).error.message || out; } catch { return out || `hc exited ${r.code}`; }
 }
 
-export default class Broadcast extends View {
+export default class SyncPanes extends View {
   init(_props, cx) {
     const f = focused();
     this.tab = f?.tab ?? null;
@@ -174,8 +174,8 @@ export default class Broadcast extends View {
   prefixed(stroke, cx) {
     if (stroke === "escape") return;
     const action = bindingFor(`${prefixKey()} ${stroke}`);
-    if (!action || action.startsWith("mod.open:broadcast")) return;
-    if (action === "broadcast.stop") return this.stop();
+    if (!action || action.startsWith("mod.open:sync-panes")) return;
+    if (action === "sync-panes.stop") return this.stop();
     if (action.startsWith("send:")) {
       if (!this.error) this.pushSend(action.slice(5), cx);
       return;
@@ -294,7 +294,7 @@ export default class Broadcast extends View {
       : !n ? LABEL.none
       : live ? LABEL.sync(n, name)
       : LABEL.paused;
-    return h_flex().id("broadcast").track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
+    return h_flex().id("sync-panes").track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
       .on_click((_e, cx) => { this.resume(); cx.notify(); })
       .h(24).pl(10).pr(4).gap(6).items_center().rounded(12)
       .bg(t.popover).border_1().border_color(color).text_size(11.5).text_color(t.foreground)
@@ -315,7 +315,7 @@ export default class Broadcast extends View {
 // clipboard contents can't be read as osascript options. Prints the
 // clipboard's change count after the write.
 const COPY = `ObjC.import("AppKit");
-const text = $.NSProcessInfo.processInfo.environment.objectForKey("BROADCAST_TEXT");
+const text = $.NSProcessInfo.processInfo.environment.objectForKey("SYNC_PANES_TEXT");
 const pb = $.NSPasteboard.generalPasteboard;
 pb.clearContents;
 pb.setStringForType(text.isNil() ? "" : text, "public.utf8-plain-text");
@@ -325,7 +325,7 @@ pb.changeCount;`;
 const COUNT = `ObjC.import("AppKit"); $.NSPasteboard.generalPasteboard.changeCount;`;
 
 async function copy(text) {
-  const r = await exec("/usr/bin/env", [`BROADCAST_TEXT=${text}`, "osascript", "-l", "JavaScript", "-e", COPY]);
+  const r = await exec("/usr/bin/env", [`SYNC_PANES_TEXT=${text}`, "osascript", "-l", "JavaScript", "-e", COPY]);
   if (r.code !== 0) throw new Error(r.stderr.trim() || "Cannot set the clipboard");
   return Number(r.stdout.trim());
 }

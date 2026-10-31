@@ -1,10 +1,10 @@
-# Broadcast
+# Sync panes
 
 Type once, into every terminal of one tab: tmux's `synchronize-panes` for Herdr. Prefix `e` starts it, prefix `shift-e` stops it, and a small pill sits in the tab bar while it's on. Your other prefix keys keep working while it's on, as they do in tmux. This is a piece you add to your current layout, not a whole window.
 
-![Broadcast](preview.png)
+![Sync panes](preview.png)
 
-This file is the brief: enough to build Broadcast from an empty folder. The files next to it are one build of it. If they don't work on your Herdr, or you want it different, build it again from here.
+This file is the brief: enough to build Sync panes from an empty folder. The files next to it are one build of it. If they don't work on your Herdr, or you want it different, build it again from here.
 
 ## What you see
 
@@ -24,56 +24,56 @@ This file is the brief: enough to build Broadcast from an empty folder. The file
 - Cmd-V pastes the clipboard into every pane.
 - Other Cmd shortcuts are ignored. IME composition doesn't reach it; paste Japanese and other composed text with Cmd-V.
 - **If a send fails** for any terminal, everything still queued is dropped (a trailing Enter must not run a half-typed command anywhere), and typing is held until you click the pill. Your prefix keys still work meanwhile.
-- **Prefix keys run their bindings, as in tmux.** `<prefix> <key>` looks up that chord in `keys.json` (`mod:broadcast`, then `layout:<shown layout>`, then `global`) and runs it instead of typing the key: `ctrl-t n` goes to the next tab (which ends broadcasting), `ctrl-t shift-e` stops, a `send:` binding such as `ctrl-t a` → `send:\u0014` types its text into every terminal, and an unbound chord does nothing. `ctrl-t e` while it's on does nothing.
-- The prefix is whatever `broadcast.stop` is bound under: with `"ctrl-b shift-e": "broadcast.stop"` the prefix is `ctrl-b`. There's nothing to change in `main.js`.
+- **Prefix keys run their bindings, as in tmux.** `<prefix> <key>` looks up that chord in `keys.json` (`mod:sync-panes`, then `layout:<shown layout>`, then `global`) and runs it instead of typing the key: `ctrl-t n` goes to the next tab (which ends syncing), `ctrl-t shift-e` stops, a `send:` binding such as `ctrl-t a` → `send:\u0014` types its text into every terminal, and an unbound chord does nothing. `ctrl-t e` while it's on does nothing.
+- The prefix is whatever `sync-panes.stop` is bound under: with `"ctrl-b shift-e": "sync-panes.stop"` the prefix is `ctrl-b`. There's nothing to change in `main.js`.
 - Clicking a terminal takes the keyboard back: the pill shows "Paused" and keys go only to that terminal. Keys typed before that still reach every terminal. Clicking the pill resumes.
 - `ctrl-t shift-e` or the ✕ stops it; anything still queued is dropped.
-- Drag the pill anywhere; Herdr remembers the spot (window `key: "broadcast"`).
+- Drag the pill anywhere; Herdr remembers the spot (window `key: "sync-panes"`).
 
 ## Built from
 
-- **One mod**, `mods/broadcast/`, with `main.js` and `mod.json`. The manifest has `place: "none"` and opens as a frameless window overlay (`kind: "window"`, `key: "broadcast"`, `frame: "none"`, `at: {x: 600, y: 3}`), so there is no `layouts/` folder or layout change.
+- **One mod**, `mods/sync-panes/`, with `main.js` and `mod.json`. The manifest has `place: "none"` and opens as a frameless window overlay (`kind: "window"`, `key: "sync-panes"`, `frame: "none"`, `at: {x: 600, y: 3}`), so there is no `layouts/` folder or layout change.
 - **A `keys.json` snippet**, merged into the person's keys rather than replacing them:
 
   ```json
   {
     "global": {
-      "ctrl-t e": "mod.open:broadcast",
-      "ctrl-t shift-e": "broadcast.stop"
+      "ctrl-t e": "mod.open:sync-panes",
+      "ctrl-t shift-e": "sync-panes.stop"
     }
   }
   ```
 
-  `broadcast.stop` reaches the mod through `nextCommand()`. Use your own prefix in both lines; the mod reads it from `keys()`.
+  `sync-panes.stop` reaches the mod through `nextCommand()`. Use your own prefix in both lines; the mod reads it from `keys()`.
 - **A focusable view**: `cx.focus_handle()`, focused in `init`, and again after 300 ms only if the focused pane hasn't changed meanwhile; `track_focus` and `on_key_down` on the pill's root; `handle.is_focused()` decides Sync vs Paused.
 - **The tab**: `focused().tab` at `init`. A 300 ms `cx.timer.every`, `render()` and each send compare it with `focused().tab`; a difference stops. `stop()` sets a stopped flag, clears the queue and calls `closeOverlay(props().overlay)`; `close()` sets the flag too.
 - **Targets:** `panes()` in that tab with a `terminal`; only the `zoomed` ones when any is. Each queued item keeps the targets of the moment it was typed, and items only merge with the same targets.
 - **Named keys:** `hc(["keys", terminal, ...names])` for every target in parallel. Key events are translated from GPUI (`escape` → `esc`, uppercase → `shift+a`, `ctrl`/`alt`/`shift` joined with `+`). Keys are queued and merged so a fast typist sends batches, one batch at a time, in order. A non-zero exit from any target drops the queue and records the failing terminals and hc's `error.message`.
-- **Prefix:** the first chord of the `broadcast.stop` binding in `keys()`. The chord after it is looked up in `keys()` and run with `run()`; `name:value` actions pass the value as the command's first argument from `commands()` (digits as numbers). `send:` text is typed: control characters as `ctrl+<letter>`, `\r` as Enter, the rest as keys or pasted text.
-- **Text and paste:** `exec("pbpaste")` saves the clipboard (a non-zero exit aborts); a short JXA script run with `exec("/usr/bin/env", ["BROADCAST_TEXT=" + text, "osascript", "-l", "JavaScript", "-e", script])` sets it (the text goes in the environment, never as an argument, so clipboard contents starting with `-` can't become osascript options) through `NSPasteboard` with `org.nspasteboard.TransientType` and `org.nspasteboard.ConcealedType`, and prints the pasteboard's `changeCount`; then `run("pane.focus", {pane})` + `run("terminal.paste")` for each target. In `finally`: `pane.focus` back, the pill refocused only if it had the keyboard, and the saved text restored only if `changeCount` is still the one the write returned.
+- **Prefix:** the first chord of the `sync-panes.stop` binding in `keys()`. The chord after it is looked up in `keys()` and run with `run()`; `name:value` actions pass the value as the command's first argument from `commands()` (digits as numbers). `send:` text is typed: control characters as `ctrl+<letter>`, `\r` as Enter, the rest as keys or pasted text.
+- **Text and paste:** `exec("pbpaste")` saves the clipboard (a non-zero exit aborts); a short JXA script run with `exec("/usr/bin/env", ["SYNC_PANES_TEXT=" + text, "osascript", "-l", "JavaScript", "-e", script])` sets it (the text goes in the environment, never as an argument, so clipboard contents starting with `-` can't become osascript options) through `NSPasteboard` with `org.nspasteboard.TransientType` and `org.nspasteboard.ConcealedType`, and prints the pasteboard's `changeCount`; then `run("pane.focus", {pane})` + `run("terminal.paste")` for each target. In `finally`: `pane.focus` back, the pill refocused only if it had the keyboard, and the saved text restored only if `changeCount` is still the one the write returned.
 - On-screen words are in the `LABEL` table at the top of `main.js`.
 
 ## Watch out
 
 - `hc keys` takes only named keys: `!`, `"`, `~`, `:` and other shifted symbols are refused, uppercase letters arrive lowercase unless sent as `shift+<letter>`, and `shift+1` types `1`. That's why those go through the clipboard. Don't route all text through `hc send`: it always presses Enter and waits for ~3 s of quiet.
 - `hc attach` with piped input doesn't work, and the framed attach stream resizes the terminal, so there is no raw-bytes path from a mod.
-- The clipboard path is macOS-only (`pbpaste`, `osascript`) and briefly replaces the clipboard; non-text clipboard contents are not restored. Clipboard managers that ignore the nspasteboard.org markers may still see the typed characters: don't type secrets while broadcasting.
+- The clipboard path is macOS-only (`pbpaste`, `osascript`) and briefly replaces the clipboard; non-text clipboard contents are not restored. Clipboard managers that ignore the nspasteboard.org markers may still see the typed characters: don't type secrets while syncing.
 - The mod runs `hc`, `pbpaste` and `osascript` through `exec`. It reads no files and reaches no network.
-- A mod only sees keys while it has focus; there is no API to tap a terminal's own input. That is why the pill must exist while broadcasting, and why it isn't tmux's "keep typing in the pane" feel.
+- A mod only sees keys while it has focus; there is no API to tap a terminal's own input. That is why the pill must exist while syncing, and why it isn't tmux's "keep typing in the pane" feel.
 - Whether Herdr's own `global` bindings or the pill's key handler sees a prefix chord first depends on Herdr; the mod handles the chord itself so both orders behave the same.
-- Bind `broadcast.stop` under your prefix as a two-key sequence; a single-key binding (`"f9": "broadcast.stop"`) works for stopping but leaves the mod without a prefix, so prefix keys are typed like any other key.
+- Bind `sync-panes.stop` under your prefix as a two-key sequence; a single-key binding (`"f9": "sync-panes.stop"`) works for stopping but leaves the mod without a prefix, so prefix keys are typed like any other key.
 - `at: {x: 600, y: 3}` assumes the default `main` layout's tab bar; move it in `mod.json` or drag it once for other layouts.
 - Follow the installed `herdr.d.ts` and `gpui-kit.d.ts`; never modify shipped mods.
 
 ## Done when
 
-- `herdr-app check mods/broadcast` passes.
+- `herdr-app check mods/sync-panes` passes.
 - With two shells split in one tab, `ctrl-t e` shows "Sync 2 · <tab>" and typing `ls | grep "a"` + Enter runs the same command in both.
 - Arrows, Ctrl+C, Backspace and Tab reach both shells.
 - After a symbol is sent, the clipboard's previous text is back, and a clipboard manager's history doesn't show the symbol. Copying something while a symbol is being sent keeps what you copied.
 - Cmd-V pastes the clipboard into both.
 - Clicking a terminal shows "Paused"; clicking the pill shows "Sync 2 · <tab>" again.
-- `ctrl-t n` while broadcasting goes to the next tab and the pill closes; nothing typed before reaches the new tab.
+- `ctrl-t n` while syncing goes to the next tab and the pill closes; nothing typed before reaches the new tab.
 - Zooming one pane makes the pill say "Sync 1" and only that pane gets keys.
 - Killing one of the shells (`exit` in it from outside the pill) and typing shows "Failed …", the other shell gets nothing more until the pill is clicked.
 - `ctrl-t a` types a literal Ctrl+T into both; an unbound `ctrl-t <key>` types nothing.

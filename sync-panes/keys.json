@@ -1,0 +1,6 @@
+{
+  "global": {
+    "ctrl-t e": "mod.open:sync-panes",
+    "ctrl-t shift-e": "sync-panes.stop"
+  }
+}
