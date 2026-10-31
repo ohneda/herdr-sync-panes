@@ -17,16 +17,16 @@ This file is the brief: enough to build Sync panes from an empty folder. The fil
 
 ## How it behaves
 
-**What it shows is what it sends.** Keys are only sent while the pill says "Sync". Everything still queued is dropped when it pauses, stops, leaves its tab, fails, or when the panes it types into change. A key already handed to `hc` can't be called back.
+**What it shows is what it sends.** Keys are only sent while the pill says "Sync". Everything still queued is dropped when it pauses, stops, leaves its tab, fails, or when the panes it types into change. A key already handed to `send.py` can't be called back.
 
 - `ctrl-t e` opens the pill in the shown tab and gives it the keyboard. Every key you type goes to every terminal pane of **that tab**, in order. When a pane in it is zoomed, only that pane counts: a zoomed terminal gets keys alone, a zoomed non-terminal pane (Files, a preview) means nothing gets keys. tmux also skips panes you can't see.
 - Showing another tab (or space) ends it: the pill closes. tmux's sync is per window; leaving the window leaves it.
 - Panes added to the tab, closed, zoomed or unzoomed change who gets keys from the next key on; keys queued for the old set are dropped.
-- Letters, digits, unshifted ASCII punctuation, Enter, Tab, Backspace, Escape, arrows, Home/End, Page Up/Down, Delete, Insert, F1–F12 and Ctrl/Alt combinations of those go out as named keys. Other keys (F13, unusual combinations) are not sent.
-- Anything else that types a character (shifted symbols like `!`, `"`, `|`, `:`, and non-ASCII) is pasted into each pane through the clipboard. What was on the clipboard, every type of it (rich text too), is put back afterwards. If you copy something during that half second, your copy is kept instead, except in two short gaps between osascript runs (see Watch out). A clipboard over about 400 KB (usually an image) is never touched: those symbols aren't sent, and it counts as a failure. The typed text carries the nspasteboard.org Transient and Concealed markers, so clipboard managers don't record it.
+- What a key types without Ctrl or Alt (letters, digits, symbols such as `!`, `"`, `|`, `:`, non-ASCII from the keyboard layout) goes as text. Enter, Tab, Backspace, Escape, Space, arrows, Home/End, Page Up/Down, Delete, Insert, F1–F12 and Ctrl/Alt combinations go as keys, encoded the way each terminal's program asked for: application cursor keys, the kitty keyboard protocol. Other keys (F13 and up) are not sent.
+- Every key is typed straight into each terminal, with no clipboard and no focus change: `|` is as quick as `l`, and keys right after it don't wait.
 - Cmd-V pastes the clipboard into every pane.
 - Other Cmd shortcuts are ignored. IME composition doesn't reach it; paste Japanese and other composed text with Cmd-V.
-- **Paused**: clicking a terminal takes the keyboard; keys go only to that terminal, and nothing queued goes anywhere. Clicking the pill resumes. Pasting a symbol and moving panes with prefix keys move focus for a moment but don't pause.
+- **Paused**: clicking a terminal takes the keyboard; keys go only to that terminal, and nothing queued goes anywhere. Clicking the pill resumes. Cmd-V and moving panes with prefix keys move focus for a moment but don't pause.
 - **If a send fails** for any terminal, typing is held until you click the pill. Your prefix keys still work meanwhile.
 - **Prefix keys run their bindings, as in tmux.** `<prefix> <key>` looks up that chord in `keys.json` (`mod:sync-panes`, then `layout:<shown layout>`, then `global`) and runs it instead of typing the key: `ctrl-t n` goes to the next tab (which ends syncing), `ctrl-t shift-e` stops, a `send:` binding such as `ctrl-t a` → `send:\u0014` types its text into every terminal, an unbound chord does nothing, and so does a `terminal` binding (there's no single program to hand the key to). `ctrl-t e` while it's on does nothing. A half-typed prefix is forgotten on pause, resume, failure and stop.
 - **Moving between panes keeps syncing**, as in tmux: after a prefix binding that moves focus to another pane of the tab (`ctrl-t h`, `ctrl-t l`, a "last pane" binding), the pill takes the keyboard back. One that leaves the focused pane as it was (a rename dialog, the palette) keeps the keyboard where Herdr put it.
@@ -37,7 +37,7 @@ This file is the brief: enough to build Sync panes from an empty folder. The fil
 
 ## Built from
 
-- **One mod**, `mods/sync-panes/`, with `main.js` and `mod.json`. The manifest has `place: "none"` and opens as a frameless window overlay (`kind: "window"`, `key: "sync-panes"`, `frame: "none"`, `at: {x: 600, y: 3}`), so there is no `layouts/` folder or layout change.
+- **One mod**, `mods/sync-panes/`, with `main.js`, `send.py` and `mod.json`. The manifest has `place: "none"` and opens as a frameless window overlay (`kind: "window"`, `key: "sync-panes"`, `frame: "none"`, `at: {x: 600, y: 3}`), so there is no `layouts/` folder or layout change.
 - **A `keys.json` snippet**, merged into the person's keys rather than replacing them:
 
   ```json
@@ -52,21 +52,30 @@ This file is the brief: enough to build Sync panes from an empty folder. The fil
   `sync-panes.stop` reaches the mod through `nextCommand()`. Use your own prefix in both lines; the mod reads it from `keys()`.
 - **A focusable view**: `cx.focus_handle()`, focused in `init`, and once more 300 ms later only if the pill hasn't had the keyboard yet (focusing during render isn't allowed). `track_focus` and `on_key_down` on the pill's root; `handle.is_focused()` decides Sync vs Paused.
 - **Taking the keyboard back** (`regain()`): Herdr applies `pane.focus` / `pane.go` after the mod's own `handle.focus()` in the same turn, so focusing right away loses. After a paste (if the pill had the keyboard) and after a prefix action that changed `focused().pane`, `cx.timer.after` tries again at 30, 120 and 300 ms, while the tab is the same and the pill doesn't have it, and calls `cx.notify()`: a focus handle changing doesn't redraw the pill by itself. The 300 ms watch timer also redraws whenever focus differs from what was last drawn, so Sync / Paused is never stale.
-- **One watch** (`watch()`, on a 300 ms `cx.timer.every`, on every render, before every queued key and before every send): a different `focused().tab` stops; losing the keyboard (outside the 500 ms after a paste moves focus) or a different target set drops the queue. Dropping bumps a generation number; queued items and in-flight clipboard steps carry the generation they were made in and give up when it changed, when stopped, or when the tab changed.
+- **One watch** (`watch()`, on a 300 ms `cx.timer.every`, on every render, before every queued key and before every send): a different `focused().tab` stops; losing the keyboard (outside the 500 ms after a paste moves focus) or a different target set drops the queue. Dropping bumps a generation number; queued items carry the generation they were made in and give up when it changed, when stopped, or when the tab changed.
 - **Targets:** `panes()` in that tab; if one is `zoomed`, just it when it has a `terminal`, else none; otherwise those with a `terminal`. Each queued item keeps the targets of the moment it was typed, and items only merge with the same targets.
-- **Named keys:** `hc(["keys", terminal, ...names])` for every target, awaited with `Promise.allSettled` so the next batch never starts before every target answered. A non-zero exit or a rejection fails: the failing terminals and hc's `error.message` are kept until the pill is clicked.
+- **Typing:** each queued item is a list of input, `{text}` or `{key, mods}` (`mods`: 1 Shift, 2 Alt, 4 Ctrl; key names `enter`, `esc`, `up`, `f5`, `a`, `;`, ...). Input typed while a send runs merges into the last queued item with the same targets (adjacent text joins), up to 256 entries. One item at a time goes to `exec("python3", ["-I", `${appHome()}/mods/sync-panes/send.py`, JSON.stringify({terminals, input})])`, which prints `{terminal: null | error}`. Any error, a non-zero exit without that report, or a rejected `exec` (no python3) fails: the failing terminals and the message are kept until the pill is clicked.
 - **Prefix:** the first key of a two-key `sync-panes.stop` binding in `keys()`, by section as above. The prefix is remembered when pressed; the next key is looked up in `keys()` and run with `run()`; `name:value` actions pass the value as the command's first argument from `commands()` (digits as numbers).
-- **Text and paste:** two JXA scripts run with `exec("/usr/bin/env", [VAR=value…, "osascript", "-l", "JavaScript", "-e", script])`; values go in the environment, never as arguments, so clipboard contents starting with `-` can't become osascript options. The first saves every pasteboard type's data (base64, at most 400,000 characters in all, else `TOOBIG` and nothing changes), sets the text with `org.nspasteboard.TransientType` and `ConcealedType`, and returns the saved data and `changeCount`. Then `run("pane.focus", {pane})` + `run("terminal.paste")` for each target, if still alive; in `finally` focus goes back to the pane it came from, the pill is refocused only if it had the keyboard, and the second script restores the saved types (marked Transient) only if `changeCount` is unchanged.
+- **send.py** (Python 3, standard library only) speaks herdr-core's protocol through `hc connect`: a `hello {framed: true, generation: 1}` line, then frames `[channel u32 LE][kind u8][length u32 LE][payload]` (DATA 0, CREDIT 1, CLOSE 2; channel 0 is JSON-RPC). For each terminal, in its own thread on the one connection:
+  - `terminal.attach {terminal, cols: 0, rows: 0, history: 0}`. The core never applies a 0×0 size, so the terminal keeps the size Herdr gave it. Data that comes back is credited (CREDIT with its length).
+  - The modes are read from the first paint, which ends with `ESC[?9001h` or `l`, and from live output after it: `ESC[?1h/l` (application cursor keys), `ESC[=flags;how u` (kitty flags: set, or, and-not), `ESC[>flags u` (push), `ESC[>4;n m` (modifyOtherKeys), `ESC c` (reset). A kitty pop (`ESC[<u`) or a switch of screen (`?1049`, `?1047`, `?47`) after the paint means the flags are no longer known.
+  - Text is written as UTF-8 DATA. Keys are encoded as Ghostty (and so `hc keys`) does: legacy (`\r`, `\x7f`, `ESC[A` or `ESC OA`, `ESC[1;5A`, `ESC OP`, `ESC[15~`, Ctrl+letter as a control byte, Alt as an `ESC` prefix, Shift/Ctrl+Enter/Tab/Esc as `ESC[27;m;code~`, Shift+Tab `ESC[Z`), and kitty flags 1, 2 and 4 (`ESC[27u`, `ESC[99;5u`, `ESC[13;2u`, `ESC[1;1:1A` with flag 2, F3 as `ESC[13~`). On purpose it differs where a real terminal would: Ctrl+Shift+letter is the control byte, Alt+Shift+letter `ESC` + capital, Ctrl+[ is `ESC`. A key with no legacy encoding (Ctrl+;) sends nothing.
+  - Kitty flags 8 or 16, modifyOtherKeys with a modifier, or flags it lost track of: that key goes through the `terminal.keys` call instead, which waits for the core's quiet (see Watch out).
+  - 30 ms between keys, as `hc keys` does, so a lone Esc isn't read as Alt with what follows.
+  - Then CLOSE, and it waits for the core's CLOSE: the core reads a connection's frames in order, so by then every byte has gone to the terminal. Each attach waits at most 5 s for the first paint; the whole run gives up after 25 s (`exec` allows 30).
+- **Cmd-V:** `run("pane.focus", {pane})` + `run("terminal.paste")` for each target; in `finally` focus goes back to the pane it came from, and the pill is refocused only if it had the keyboard.
 - On-screen words are in the `LABEL` table at the top of `main.js`.
 
 ## Watch out
 
-- `hc keys` takes only named keys: `!`, `"`, `~`, `:` and other shifted symbols are refused, uppercase letters arrive lowercase unless sent as `shift+<letter>`, and `shift+1` types `1`. That's why those go through the clipboard. Don't route all text through `hc send`: it always presses Enter and waits for ~3 s of quiet.
-- `hc attach` with piped input doesn't work, and the framed attach stream resizes the terminal, so there is no raw-bytes path from a mod. That is also why the clipboard is borrowed at all.
-- The clipboard can't be locked. A copy you make in the instant between the first script reading the clipboard and writing it, or between the second script's `changeCount` check and its restore, is overwritten. Outside those instants it's kept.
-- `run()` returns nothing, so the mod can't tell whether a paste landed, only that it asked.
-- The clipboard path is macOS-only (`osascript`). Clipboard managers that ignore the nspasteboard.org markers may still see typed characters: don't type secrets while syncing.
-- The mod runs `hc` and `osascript` through `exec`. It reads no files and reaches no network.
+- `hc keys` and `hc send` wait until nobody has typed into that terminal for about 3 s (herdr-core's `HC_QUIET_MS`, 3000 by default, read when the core starts). A paste and anything typed through an attach count as typing. That was the lag after `|` when symbols went through the clipboard and the next keys through `hc keys`: so all typing goes through one attach, and `hc keys` only for the rare key send.py can't encode.
+- `hc keys` takes only named keys: `!`, `"`, `|` are refused, and `shift+1` types `1`. `hc send` always presses Enter.
+- An attach's size is applied whenever it types; `resumed: true` only delays it. Asking for 0×0 is what keeps the size. `observe: true` can't type.
+- send.py finds the end of the first paint by its `ESC[?9001` (herdr-core 0.1.15). If a core sends something else, each send waits 5 s and fails.
+- The key encoder is send.py's own, checked against what `hc keys` sends in legacy, application cursor, modifyOtherKeys and kitty 1, 5 and 7 modes. A mode change caused by a key in the same batch (Enter starting vim) applies to the keys after it only once the program's output has come back.
+- `run()` returns nothing, so the mod can't tell whether a Cmd-V paste landed, only that it asked.
+- send.py needs `python3` on the PATH Herdr's `exec` uses (macOS: Command Line Tools or Homebrew). Without it every send fails and says so.
+- The mod runs `python3` (send.py, which runs `hc connect`) through `exec`. It reads no files and reaches no network.
 - A mod only sees keys while it has focus; there is no API to tap a terminal's own input. That is why the pill must exist while syncing, and why it isn't tmux's "keep typing in the pane" feel.
 - Whether Herdr's own bindings or the pill's key handler sees a chord first hasn't been settled; the mod handles prefix chords itself so they behave the same either way. Check `ctrl-t shift-e` on your Herdr after installing.
 - Bind `sync-panes.stop` under your prefix as a two-key sequence. With a single-key binding the mod has no prefix, and the pill takes every key itself, so that key may not reach Herdr; use the ✕ then.
@@ -78,7 +87,8 @@ This file is the brief: enough to build Sync panes from an empty folder. The fil
 - `herdr-app check mods/sync-panes` passes.
 - With two shells split in one tab, `ctrl-t e` shows "Sync 2 · <tab>" and typing `ls | grep "a"` + Enter runs the same command in both.
 - Arrows, Ctrl+C, Backspace and Tab reach both shells.
-- After a symbol is sent, the clipboard holds what it held before (rich text stays rich), and a clipboard manager's history doesn't show the symbol. With an image on the clipboard, a symbol isn't sent and the image is still there.
+- Typing `ls | wc -l` + Enter at a normal pace: every key, `|` and those after it included, reaches both shells within about 0.1 s; the clipboard isn't touched and the terminals keep their size.
+- With vim open in both panes, arrows move and Esc leaves insert mode.
 - Cmd-V pastes the clipboard into both.
 - Clicking a terminal shows "Paused" and typing goes only there; clicking the pill shows "Sync 2 · <tab>" again.
 - Typing `ls |` keeps "Sync 2 · <tab>", and the next keys still reach both shells.

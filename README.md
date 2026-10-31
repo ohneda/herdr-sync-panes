@@ -14,7 +14,7 @@ A [Herdr](https://herdr.dev) mod: type once, into every terminal of a tab, like 
 
 - **The pill holds the keyboard.** Herdr gives mods no way to listen to a terminal's own input, so you type into the pill and it types into the panes. Click a terminal to type into just that one ("Paused"); click the pill to sync again.
 - **Japanese and other IME input** doesn't reach the pill; paste it with Cmd-V.
-- **Shifted symbols (`!`, `"`, `|`) and non-ASCII go through the clipboard (macOS only).** Your clipboard is put back afterwards, rich text included. A clipboard over about 400 KB (an image) is left alone and those symbols aren't sent. Clipboard managers that honor the nspasteboard.org markers don't record what you type; others might, so don't type secrets while syncing.
+- **It needs `python3`.** Keys are typed by a small helper, `send.py`, that attaches to each terminal through `hc connect` and writes what the key sends there, encoded for the program's keyboard mode. That's how `|`, `"` and non-ASCII go without the clipboard and without the ~3 s wait `hc keys` keeps after a person types.
 - **Zoom:** like tmux, panes you can't see don't get keys.
 
 See [`sync-panes/RECIPE.md`](sync-panes/RECIPE.md) for exactly what it does, how it's built and its limits.
@@ -32,11 +32,11 @@ else
 fi
 ```
 
-Then merge [`sync-panes/keys.json`](sync-panes/keys.json) into `~/.config/herdr-app/keys.json`. Check that nothing else already uses those keys; if your prefix isn't `ctrl-t`, change it in both lines. The mod takes its prefix from the `sync-panes.stop` binding, so nothing in `main.js` needs editing. Installing under another folder name means renaming `sync-panes` in `mod.json`'s `key`, in `main.js` (`mod:sync-panes`, `sync-panes.stop`, `mod.open:sync-panes`) and in your keys.
+Then merge [`sync-panes/keys.json`](sync-panes/keys.json) into `~/.config/herdr-app/keys.json`. Check that nothing else already uses those keys; if your prefix isn't `ctrl-t`, change it in both lines. The mod takes its prefix from the `sync-panes.stop` binding, so nothing in `main.js` needs editing. Installing under another folder name means renaming `sync-panes` in `mod.json`'s `key`, in `main.js` (`mod:sync-panes`, `sync-panes.stop`, `mod.open:sync-panes`, `mods/sync-panes/send.py`) and in your keys.
 
 ## What it runs
 
-`hc keys` to type into terminals, and `osascript` to borrow and restore the clipboard for characters `hc keys` can't name. It reads no files and makes no network requests.
+`python3 send.py`, which runs `hc connect` to type into the terminals (and `hc keys` for the rare key it can't encode itself). It reads no files and makes no network requests.
 
 ## License
 

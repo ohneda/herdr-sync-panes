@@ -1,13 +1,14 @@
 // Types the same input into every terminal of one tab, like tmux's
 // synchronize-panes. While this window has the keyboard, each key goes to
-// all of them: named keys through `hc keys`, text it can't name (shifted
-// symbols, non-ASCII) through the clipboard and `terminal.paste` on each pane
-// (macOS: osascript). Cmd-V pastes the clipboard to all.
+// all of them through send.py, which attaches to each terminal and types
+// the bytes the key sends there (python3). It never touches the clipboard or
+// focus, and doesn't wait for the quiet `hc keys` keeps after a person types.
+// Cmd-V pastes the clipboard to all with `terminal.paste` on each pane.
 //
 // What it shows is what it sends: keys are only sent while the pill says
 // Sync. Pausing (the keyboard went elsewhere), stopping, leaving the tab, a
 // change in which panes are targeted and a failed send all drop what's
-// still queued; a send already handed to hc can't be called back. A failed
+// still queued; a send already handed to send.py can't be called back. A failed
 // send also holds input until the pill is clicked. <prefix> <key> runs that
 // key's binding from keys.json instead of typing it; the prefix is read from
 // the binding of sync-panes.stop. Opened with mod.open:sync-panes; the stop
@@ -15,7 +16,7 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { hc, exec, run, panes, focused, spaces, keys, commands, shared, theme, props, closeOverlay, notify, nextCommand } from "herdr";
+import { exec, appHome, run, panes, focused, spaces, keys, commands, shared, theme, props, closeOverlay, notify, nextCommand } from "herdr";
 
 const LABEL = {
   sync: (n, tab) => `Sync ${n} · ${tab}`,
@@ -23,30 +24,30 @@ const LABEL = {
   none: "No terminals",
   failed: (who) => `Failed ${who} · click to resume`,
   failedTitle: "Sync panes stopped sending",
-  tooBig: "The clipboard is too large to put back (an image?); symbols weren't sent so it isn't lost",
   badSend: "This send: binding has characters that can't be typed; nothing was sent",
 };
 
-// Characters `hc keys` takes as they are.
-const PLAIN = /^[a-z0-9\-,.=\[\]';`/]$/;
-// GPUI key names -> hc key names, where they differ.
+// GPUI key names -> send.py key names, where they differ.
 const NAMED = {
   escape: "esc", enter: "enter", backspace: "backspace", tab: "tab", space: "space",
   up: "up", down: "down", left: "left", right: "right", home: "home", end: "end",
   pageup: "pageup", pagedown: "pagedown", delete: "delete", insert: "insert",
 };
+// send.py's modifier bits.
+const SHIFT = 1, ALT = 2, CTRL = 4;
+// The most input one send.py run carries.
+const BATCH = 256;
 // Herdr applies a pane focus after the mod's own focus call, so after
 // moving focus (a paste, <prefix> h) the pill takes the keyboard back on
 // these delays, and losing it meanwhile isn't called a pause.
 const REGAIN_MS = [30, 120, 300];
 const SETTLE_MS = 500;
 
-// One key as an hc key name, or null when hc can't name it.
+// One key as a send.py key name, or null when it has none.
 function keyName(base) {
   if (NAMED[base]) return NAMED[base];
   if (/^f([1-9]|1[0-2])$/.test(base)) return base;
-  if (base === "\\") return "backslash";
-  if (PLAIN.test(base)) return base;
+  if (/^[\x21-\x7e]$/.test(base)) return base.toLowerCase();
   return null;
 }
 
@@ -84,29 +85,20 @@ function runAction(action) {
   run(name, arg ? { [arg]: /^\d+$/.test(value) ? Number(value) : value } : {});
 }
 
-// A send: binding's text as queue items, or null when any character can't
-// be typed faithfully (NUL, ctrl+\ ] ^ _, DEL): then nothing is sent.
+// A send: binding's text as input, or null when any character can't be
+// typed faithfully (NUL, ctrl+\ ] ^ _, DEL): then nothing is sent.
 function sendItems(text) {
   const out = [];
   for (const ch of text) {
     const code = ch.codePointAt(0);
-    if (ch === "\r" || ch === "\n") out.push({ keys: ["enter"] });
-    else if (ch === "\t") out.push({ keys: ["tab"] });
-    else if (ch === "\u001b") out.push({ keys: ["esc"] });
-    else if (code >= 1 && code <= 26) out.push({ keys: ["ctrl+" + String.fromCharCode(code + 96)] });
+    if (ch === "\r" || ch === "\n") out.push({ key: "enter", mods: 0 });
+    else if (ch === "\t") out.push({ key: "tab", mods: 0 });
+    else if (ch === "\u001b") out.push({ key: "esc", mods: 0 });
+    else if (code >= 1 && code <= 26) out.push({ key: String.fromCharCode(code + 96), mods: CTRL });
     else if (code < 32 || code === 127) return null;
-    else {
-      const name = keyName(ch);
-      out.push(name ? { keys: [name] } : { text: ch });
-    }
+    else out.push({ text: ch });
   }
   return out;
-}
-
-// hc's message from a failed run (it prints {"error": {"message"}}).
-function failure(r) {
-  const out = (r.stderr || r.stdout || "").trim();
-  try { return JSON.parse(out).error.message || out; } catch { return out || `hc exited ${r.code}`; }
 }
 
 export default class SyncPanes extends View {
@@ -196,24 +188,18 @@ export default class SyncPanes extends View {
     closeOverlay(props().overlay);
   }
 
-  // A KeyEvent as a queue item: { keys: [...] }, { text }, or null.
+  // A KeyEvent as input: { key, mods }, { text }, or null. What a key
+  // types without Ctrl or Alt (letters, symbols, Japanese) goes as text.
   translate(e) {
     const m = e.modifiers;
     const base = e.key;
-    if (m.control || m.alt) {
+    const mods = (m.shift ? SHIFT : 0) | (m.alt ? ALT : 0) | (m.control ? CTRL : 0);
+    if (m.control || m.alt || NAMED[base] || /^f([1-9]|1[0-2])$/.test(base)) {
       const name = keyName(base);
-      if (!name) return null;
-      const mods = [m.control && "ctrl", m.alt && "alt", m.shift && "shift"].filter(Boolean);
-      return { keys: [[...mods, name].join("+")] };
-    }
-    if (NAMED[base] || /^f([1-9]|1[0-2])$/.test(base)) {
-      return { keys: [(m.shift ? "shift+" : "") + keyName(base)] };
+      return name ? { key: name, mods } : null;
     }
     const ch = e.key_char;
-    if (!ch) return null;
-    if (/^[A-Z]$/.test(ch)) return { keys: ["shift+" + ch.toLowerCase()] };
-    const name = keyName(ch);
-    return name ? { keys: [name] } : { text: ch };
+    return ch ? { text: ch } : null;
   }
 
   key(e, cx) {
@@ -236,8 +222,8 @@ export default class SyncPanes extends View {
       if (e.key === "v") this.push({ paste: true }, cx);
       return;
     }
-    const item = this.translate(e);
-    if (item) this.push(item, cx);
+    const input = this.translate(e);
+    if (input) this.push({ input: [input] }, cx);
   }
 
   // <prefix> <key>: that key's binding, as tmux runs its command instead of
@@ -252,7 +238,7 @@ export default class SyncPanes extends View {
       if (this.error) return;
       const items = sendItems(action.slice(5));
       if (!items) return notify({ title: LABEL.failedTitle, body: LABEL.badSend, level: "warning" });
-      for (const item of items) this.push(item, cx);
+      this.push({ input: items }, cx);
       return;
     }
     // Moving between panes keeps syncing, as in tmux; an action that opens
@@ -276,8 +262,8 @@ export default class SyncPanes extends View {
     }
   }
 
-  // Queues an item for the panes there are now, merging it into the last
-  // one of its kind when it goes to the same panes.
+  // Queues an item for the panes there are now, merging its input into the
+  // last item's when that goes to the same panes and has room.
   push(item, cx) {
     // Catch up first, so a change in panes drops older items, not this one.
     this.watch();
@@ -288,9 +274,13 @@ export default class SyncPanes extends View {
     item.to = targets.map((p) => p.terminal).join(" ");
     item.gen = this.gen;
     const last = this.queue[this.queue.length - 1];
-    if (last && last.to === item.to && item.keys && last.keys) last.keys.push(...item.keys);
-    else if (last && last.to === item.to && item.text != null && last.text != null) last.text += item.text;
-    else this.queue.push(item);
+    if (last && last.to === item.to && last.input && item.input && last.input.length + item.input.length <= BATCH) {
+      for (const input of item.input) {
+        const end = last.input[last.input.length - 1];
+        if (end?.text != null && input.text != null) end.text += input.text;
+        else last.input.push(input);
+      }
+    } else this.queue.push(item);
     this.drain(cx);
   }
 
@@ -303,9 +293,8 @@ export default class SyncPanes extends View {
           this.watch();
           const item = this.queue.shift();
           if (!item || !this.alive(item.gen)) continue;
-          if (item.keys) await this.sendKeys(item.targets, item.keys);
-          else if (item.paste) this.pasteEach(item.targets, cx);
-          else await this.sendText(item.targets, item.text, item.gen, cx);
+          if (item.paste) this.pasteEach(item.targets, cx);
+          else await this.send(item.targets, item.input);
         }
       } catch (err) {
         this.fail([], String(err?.message ?? err));
@@ -324,35 +313,16 @@ export default class SyncPanes extends View {
     notify({ title: LABEL.failedTitle, body: `${terminals.join(", ")} ${this.error.message}`.trim(), level: "error" });
   }
 
-  // Waits for every target to answer, failed or not, before the next batch.
-  async sendKeys(targets, names) {
-    const settled = await Promise.allSettled(targets.map((p) => hc(["keys", p.terminal, ...names])));
-    const bad = [];
-    let message = "";
-    settled.forEach((s, i) => {
-      const r = s.status === "fulfilled" ? s.value : null;
-      if (r && r.code === 0) return;
-      bad.push(targets[i].terminal);
-      message ||= r ? failure(r) : String(s.reason?.message ?? s.reason);
-    });
-    if (bad.length) this.fail(bad, message);
-  }
-
-  // Text hc keys can't name: on the clipboard, pasted into each pane, then
-  // the clipboard is put back, every type it held (rich text too). Saving
-  // and setting happen in one osascript, and so do checking and restoring,
-  // which keeps the window in which a copy of yours could be overwritten
-  // small, but not zero. A clipboard too large to carry back (images) is
-  // never touched: the symbols aren't sent.
-  async sendText(targets, text, gen, cx) {
-    const r = await clip(SAVE_AND_SET, { SYNC_PANES_TEXT: text });
-    if (r === "TOOBIG") throw new Error(LABEL.tooBig);
-    const { saved, count } = JSON.parse(r);
-    try {
-      if (this.alive(gen)) this.pasteEach(targets, cx);
-    } finally {
-      await clip(RESTORE, { SYNC_PANES_SAVED: JSON.stringify(saved), SYNC_PANES_COUNT: String(count) });
-    }
+  // One send.py run types the input into every target and reports each
+  // one, failed or not, before the next batch goes.
+  async send(targets, input) {
+    const terminals = targets.map((p) => p.terminal);
+    const r = await exec("python3", ["-I", `${appHome()}/mods/sync-panes/send.py`, JSON.stringify({ terminals, input })]);
+    let report = null;
+    try { report = JSON.parse(r.stdout); } catch {}
+    if (r.code !== 0 || !report) return this.fail(terminals, (r.stderr || r.stdout).trim().split("\n").pop() || `send.py exited ${r.code}`);
+    const bad = terminals.filter((t) => report[t] !== null);
+    if (bad.length) this.fail(bad, report[bad[0]]);
   }
 
   // Pastes into each pane in turn; run() doesn't report whether a paste
@@ -409,55 +379,4 @@ export default class SyncPanes extends View {
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
         .on_click(() => this.stop()).child("✕"));
   }
-}
-
-// Clipboard scripts (JXA). Values travel in environment variables, never as
-// arguments, so clipboard contents can't be read as osascript options.
-// Typed text is marked with the nspasteboard.org Transient and Concealed
-// markers, so clipboard managers don't record or show it; the restored
-// contents are marked Transient so they aren't recorded twice. Saved
-// contents are every type's data, base64, at most SAVE_LIMIT characters in
-// all: environment variables can't carry much more.
-const SAVE_LIMIT = 400000;
-const MARKERS = ["org.nspasteboard.TransientType", "org.nspasteboard.ConcealedType"];
-const SAVE_AND_SET = `function run() {
-  ObjC.import("AppKit");
-  const env = $.NSProcessInfo.processInfo.environment;
-  const pb = $.NSPasteboard.generalPasteboard;
-  const markers = ${JSON.stringify(MARKERS)};
-  const saved = [];
-  let size = 0;
-  for (const type of ObjC.deepUnwrap(pb.types) || []) {
-    if (markers.includes(type)) continue;
-    const data = pb.dataForType(type);
-    if (data.isNil()) continue;
-    const b64 = data.base64EncodedStringWithOptions(0).js;
-    size += b64.length + type.length;
-    if (size > ${SAVE_LIMIT}) return "TOOBIG";
-    saved.push([type, b64]);
-  }
-  pb.clearContents;
-  pb.setStringForType(env.objectForKey("SYNC_PANES_TEXT"), "public.utf8-plain-text");
-  for (const m of markers) pb.setStringForType("", m);
-  return JSON.stringify({ saved, count: pb.changeCount });
-}`;
-const RESTORE = `function run() {
-  ObjC.import("AppKit");
-  const env = $.NSProcessInfo.processInfo.environment;
-  const pb = $.NSPasteboard.generalPasteboard;
-  if (String(pb.changeCount) !== env.objectForKey("SYNC_PANES_COUNT").js) return "changed";
-  const saved = JSON.parse(env.objectForKey("SYNC_PANES_SAVED").js);
-  pb.clearContents;
-  if (!saved.length) return "restored";
-  pb.declareTypesOwner(saved.map((s) => s[0]).concat(["${MARKERS[0]}"]), null);
-  for (const [type, b64] of saved) pb.setDataForType($.NSData.alloc.initWithBase64EncodedStringOptions(b64, 0), type);
-  pb.setStringForType("", "${MARKERS[0]}");
-  return "restored";
-}`;
-
-async function clip(script, vars) {
-  const assigns = Object.entries(vars).map(([k, v]) => `${k}=${v}`);
-  const r = await exec("/usr/bin/env", [...assigns, "osascript", "-l", "JavaScript", "-e", script]);
-  if (r.code !== 0) throw new Error(r.stderr.trim() || "Cannot use the clipboard");
-  return r.stdout.trim();
 }
