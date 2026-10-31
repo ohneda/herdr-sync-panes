@@ -2,5 +2,8 @@
   "global": {
     "ctrl-t e": "mod.open:sync-panes",
     "ctrl-t shift-e": "sync-panes.stop"
+  },
+  "mod:sync-panes": {
+    "ctrl-t a": "sync-panes.send:\u0014"
   }
 }

@@ -7,6 +7,7 @@ A [Herdr](https://herdr.dev) mod: type once, into every terminal of a tab, like 
 - `ctrl-t e` starts syncing in the shown tab; a small "Sync N · <tab>" pill sits in the tab bar. That's this mod's default: tmux has no default key for `synchronize-panes`, so pick your own (below).
 - `ctrl-t shift-e` (or the pill's ✕) stops it. Showing another tab stops it too.
 - Your other prefix keys keep working, as in tmux: with Herdr's `ctrl-t n` bound to `tab.next`, it goes to the next tab instead of typing `n`.
+- `ctrl-t a` types a literal `ctrl-t` into every terminal, like tmux's `send-prefix` (from the `mod:sync-panes` section of `keys.json`).
 - Cmd-V pastes the clipboard into every terminal.
 - What the pill shows is what it sends: when it says Paused, failed or is gone, nothing still queued is typed anywhere.
 

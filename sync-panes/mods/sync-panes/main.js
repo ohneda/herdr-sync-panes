@@ -133,9 +133,14 @@ export default class SyncPanes extends View {
       this.watch(cx);
       if (this.handle.is_focused() !== this.shownLive) cx.notify();
     });
+    // sync-panes.stop, and sync-panes.send:<text> from a binding in the
+    // mod:sync-panes section of keys.json: Herdr runs bindings itself, so a
+    // plain send: would type into no terminal while the pill has the keyboard.
     cx.spawn(async (cx) => {
       for (;;) {
-        if ((await nextCommand()) === "stop") this.stop();
+        const command = await nextCommand();
+        if (command === "stop") this.stop();
+        else if (command.startsWith("send:")) this.typeText(command.slice(5), cx);
         cx.notify();
       }
     });
@@ -255,18 +260,20 @@ export default class SyncPanes extends View {
     const action = bindingFor(`${prefix} ${stroke}`);
     if (!action || action === "terminal" || action.startsWith("mod.open:sync-panes")) return;
     if (action === "sync-panes.stop") return this.stop();
-    if (action.startsWith("send:")) {
-      if (this.error) return;
-      const items = sendItems(action.slice(5));
-      if (!items) return notify({ title: LABEL.failedTitle, body: LABEL.badSend, level: "warning" });
-      this.push({ input: items }, cx);
-      return;
-    }
+    if (action.startsWith("send:")) return this.typeText(action.slice(5), cx);
     // Moving between panes keeps syncing, as in tmux; an action that opens
     // a dialog leaves the focused pane as it was and keeps the keyboard.
     const before = focused()?.pane;
     runAction(action);
     this.regain(cx, before);
+  }
+
+  // A send: binding's text, typed into every terminal.
+  typeText(text, cx) {
+    if (this.stopped || this.error) return;
+    const items = sendItems(text);
+    if (!items) return notify({ title: LABEL.failedTitle, body: LABEL.badSend, level: "warning" });
+    this.push({ input: items }, cx);
   }
 
   // Takes the keyboard back once Herdr has moved focus, if the pill had it,
