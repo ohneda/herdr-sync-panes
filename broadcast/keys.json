@@ -1,0 +1,6 @@
+{
+  "global": {
+    "ctrl-t e": "mod.open:broadcast",
+    "ctrl-t shift-e": "broadcast.stop"
+  }
+}
