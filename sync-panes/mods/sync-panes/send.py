@@ -4,7 +4,8 @@
 # send. Unlike `hc keys`, this never waits for a person to stop typing, and
 # unlike a paste it needs no clipboard or focus.
 #
-# argv[1]: {"terminals": ["t7", ...], "input": [{"text": "ls |"}, {"key": "enter", "mods": 0}, ...]}
+# argv[1]: a file (deleted once read) holding
+#   {"terminals": ["t7", ...], "input": [{"text": "ls |"}, {"key": "enter", "mods": 0}, ...]}
 # mods: 1 shift, 2 alt, 4 ctrl. Prints {"t7": null | "why it failed", ...}.
 #
 # Keys are encoded for each terminal's keyboard modes, read from the first
@@ -16,7 +17,7 @@
 #
 # The attach asks for size 0x0, which the core never applies, so the
 # terminal keeps the size Herdr gave it.
-import json, re, struct, subprocess, sys, threading, time
+import json, os, re, struct, subprocess, sys, threading, time
 
 DATA, CREDIT, CLOSE = 0, 1, 2
 GAP = 0.03      # between keys, as hc keys does: a lone Esc and what follows stay apart
@@ -247,7 +248,11 @@ def type_into(conn, terminal, items, until):
 
 
 def main():
-    req = json.loads(sys.argv[1])
+    try:
+        with open(sys.argv[1], encoding="utf-8") as f:
+            req = json.load(f)
+    finally:
+        os.unlink(sys.argv[1])
     until = time.time() + DEADLINE
     out = {t: "not sent" for t in req["terminals"]}
     try:

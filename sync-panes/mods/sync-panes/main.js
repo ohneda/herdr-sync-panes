@@ -16,7 +16,7 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { exec, appHome, run, panes, focused, spaces, keys, commands, shared, theme, props, closeOverlay, notify, nextCommand } from "herdr";
+import { exec, appHome, writeTextFile, run, panes, focused, spaces, keys, commands, shared, theme, props, closeOverlay, notify, nextCommand } from "herdr";
 
 const LABEL = {
   sync: (n, tab) => `Sync ${n} · ${tab}`,
@@ -141,6 +141,7 @@ export default class SyncPanes extends View {
   async close() {
     this.stopped = true;
     this.drop();
+    if (this.inbox) await exec("rm", ["-rf", this.inbox]);
   }
 
   // The tab's terminal panes. When a pane is zoomed, only it counts, and
@@ -314,10 +315,20 @@ export default class SyncPanes extends View {
   }
 
   // One send.py run types the input into every target and reports each
-  // one, failed or not, before the next batch goes.
+  // one, failed or not, before the next batch goes. What's typed travels in
+  // a file in a folder only this user can open (send.py deletes it), never
+  // in arguments, which other users can see in `ps`: synced typing is often
+  // a password.
   async send(targets, input) {
     const terminals = targets.map((p) => p.terminal);
-    const r = await exec("python3", ["-I", `${appHome()}/mods/sync-panes/send.py`, JSON.stringify({ terminals, input })]);
+    if (!this.inbox) {
+      const m = await exec("python3", ["-I", "-c", "import tempfile; print(tempfile.mkdtemp(prefix='sync-panes-'))"]);
+      if (m.code !== 0 || !m.stdout.trim()) return this.fail(terminals, m.stderr.trim() || "python3 can't make a folder for send.py");
+      this.inbox = m.stdout.trim();
+    }
+    const file = `${this.inbox}/${this.sends = (this.sends ?? 0) + 1}.json`;
+    await writeTextFile(file, JSON.stringify({ terminals, input }), null);
+    const r = await exec("python3", ["-I", `${appHome()}/mods/sync-panes/send.py`, file]);
     let report = null;
     try { report = JSON.parse(r.stdout); } catch {}
     if (r.code !== 0 || !report) return this.fail(terminals, (r.stderr || r.stdout).trim().split("\n").pop() || `send.py exited ${r.code}`);
