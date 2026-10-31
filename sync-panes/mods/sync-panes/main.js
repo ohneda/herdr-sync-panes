@@ -35,9 +35,11 @@ const NAMED = {
   up: "up", down: "down", left: "left", right: "right", home: "home", end: "end",
   pageup: "pageup", pagedown: "pagedown", delete: "delete", insert: "insert",
 };
-// After moving focus for a paste, the pill takes a moment to have the
-// keyboard again; don't call that a pause.
-const PASTE_SETTLE_MS = 500;
+// Herdr applies a pane focus after the mod's own focus call, so after
+// moving focus (a paste, <prefix> h) the pill takes the keyboard back on
+// these delays, and losing it meanwhile isn't called a pause.
+const REGAIN_MS = [30, 120, 300];
+const SETTLE_MS = 500;
 
 // One key as an hc key name, or null when hc can't name it.
 function keyName(base) {
@@ -123,10 +125,19 @@ export default class SyncPanes extends View {
     this.handle.focus();
     // One more try if the first didn't take, unless the pill has already
     // had the keyboard: then wherever it went was the person's choice.
-    cx.timer.after(300, () => {
-      if (!this.wasLive && !this.stopped) this.handle.focus();
+    cx.timer.after(300, (cx) => {
+      if (!this.wasLive && !this.stopped) {
+        this.handle.focus();
+        cx.notify();
+      }
     });
-    cx.timer.every(300, () => this.watch());
+    // Focus moving between the pill and a pane doesn't redraw the pill by
+    // itself; redraw when it changed so Sync / Paused is never stale.
+    this.shownLive = null;
+    cx.timer.every(300, (cx) => {
+      this.watch();
+      if (this.handle.is_focused() !== this.shownLive) cx.notify();
+    });
     cx.spawn(async (cx) => {
       for (;;) {
         if ((await nextCommand()) === "stop") this.stop();
@@ -244,7 +255,25 @@ export default class SyncPanes extends View {
       for (const item of items) this.push(item, cx);
       return;
     }
+    // Moving between panes keeps syncing, as in tmux; an action that opens
+    // a dialog leaves the focused pane as it was and keeps the keyboard.
+    const before = focused()?.pane;
     runAction(action);
+    this.regain(cx, before);
+  }
+
+  // Takes the keyboard back once Herdr has moved focus, if the pill had it,
+  // the tab is the same and (with `before`) the focused pane changed.
+  regain(cx, before) {
+    this.quietUntil = Date.now() + SETTLE_MS;
+    for (const ms of REGAIN_MS) {
+      cx.timer.after(ms, (cx) => {
+        if (this.stopped || this.handle.is_focused() || focused()?.tab !== this.tab) return;
+        if (before !== undefined && focused()?.pane === before) return;
+        this.handle.focus();
+        cx.notify();
+      });
+    }
   }
 
   // Queues an item for the panes there are now, merging it into the last
@@ -275,8 +304,8 @@ export default class SyncPanes extends View {
           const item = this.queue.shift();
           if (!item || !this.alive(item.gen)) continue;
           if (item.keys) await this.sendKeys(item.targets, item.keys);
-          else if (item.paste) this.pasteEach(item.targets);
-          else await this.sendText(item.targets, item.text, item.gen);
+          else if (item.paste) this.pasteEach(item.targets, cx);
+          else await this.sendText(item.targets, item.text, item.gen, cx);
         }
       } catch (err) {
         this.fail([], String(err?.message ?? err));
@@ -315,12 +344,12 @@ export default class SyncPanes extends View {
   // which keeps the window in which a copy of yours could be overwritten
   // small, but not zero. A clipboard too large to carry back (images) is
   // never touched: the symbols aren't sent.
-  async sendText(targets, text, gen) {
+  async sendText(targets, text, gen, cx) {
     const r = await clip(SAVE_AND_SET, { SYNC_PANES_TEXT: text });
     if (r === "TOOBIG") throw new Error(LABEL.tooBig);
     const { saved, count } = JSON.parse(r);
     try {
-      if (this.alive(gen)) this.pasteEach(targets);
+      if (this.alive(gen)) this.pasteEach(targets, cx);
     } finally {
       await clip(RESTORE, { SYNC_PANES_SAVED: JSON.stringify(saved), SYNC_PANES_COUNT: String(count) });
     }
@@ -329,10 +358,10 @@ export default class SyncPanes extends View {
   // Pastes into each pane in turn; run() doesn't report whether a paste
   // landed. Focus goes back to where it was, and the pill gets the keyboard
   // back only if it had it.
-  pasteEach(targets) {
+  pasteEach(targets, cx) {
     const back = focused()?.pane;
     const live = this.handle.is_focused();
-    this.quietUntil = Date.now() + PASTE_SETTLE_MS;
+    this.quietUntil = Date.now() + SETTLE_MS;
     try {
       for (const p of targets) {
         run("pane.focus", { pane: p.pane });
@@ -340,7 +369,10 @@ export default class SyncPanes extends View {
       }
     } finally {
       if (back) run("pane.focus", { pane: back });
-      if (live) this.handle.focus();
+      if (live) {
+        this.handle.focus();
+        if (cx) this.regain(cx);
+      }
     }
   }
 
@@ -357,6 +389,7 @@ export default class SyncPanes extends View {
     const t = theme();
     const n = this.targets().length;
     const live = this.handle.is_focused();
+    this.shownLive = live;
     const name = spaces().flatMap((s) => s.tabs).find((x) => x.id === this.tab)?.name ?? "";
     const color = this.error ? t.blocked : live && n ? t.accent : t.dim;
     const text = this.error ? LABEL.failed(this.error.terminals.join(", ") || "")
