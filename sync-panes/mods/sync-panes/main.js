@@ -113,6 +113,9 @@ export default class SyncPanes extends View {
     this.wasLive = false;
     this.quietUntil = 0;
     this.lastTo = null;
+    this.livePane = null;
+    this.liveAt = 0;
+    this.pressedAt = 0;
     this.handle = cx.focus_handle();
     this.handle.focus();
     // One more try if the first didn't take, unless the pill has already
@@ -127,7 +130,7 @@ export default class SyncPanes extends View {
     // itself; redraw when it changed so Sync / Paused is never stale.
     this.shownLive = null;
     cx.timer.every(300, (cx) => {
-      this.watch();
+      this.watch(cx);
       if (this.handle.is_focused() !== this.shownLive) cx.notify();
     });
     cx.spawn(async (cx) => {
@@ -168,14 +171,31 @@ export default class SyncPanes extends View {
 
   // Leaving the tab stops; losing the keyboard or a change in the target
   // panes drops what's queued. Runs on a timer and on every render.
-  watch() {
+  //
+  // Herdr runs keys.json bindings itself, so `<prefix> h` (pane.go) moves
+  // the keyboard to a pane without the pill seeing a key. Losing it with no
+  // press outside the pill since it last had it, to another pane of the
+  // tab, is such a move: the pill takes the keyboard back and keeps
+  // syncing, as tmux does. A click (or a dialog, which leaves the pane as
+  // it was) pauses.
+  watch(cx) {
     if (this.stopped) return;
     const tab = focused()?.tab;
     if (tab && tab !== this.tab) return this.stop();
-    if (this.handle.is_focused()) this.wasLive = true;
-    else if (this.wasLive && Date.now() > this.quietUntil) {
-      this.wasLive = false;
-      this.drop();
+    const pane = focused()?.pane;
+    if (this.handle.is_focused()) {
+      this.wasLive = true;
+      this.livePane = pane;
+      this.liveAt = Date.now();
+    } else if (this.wasLive && Date.now() > this.quietUntil) {
+      const moved = this.pressedAt < this.liveAt && pane !== this.livePane && this.targets().some((p) => p.pane === pane);
+      if (moved && cx) {
+        this.livePane = pane;
+        this.regain(cx);
+      } else if (!moved) {
+        this.wasLive = false;
+        this.drop();
+      }
     }
     const to = this.targets().map((p) => p.terminal).join(" ");
     if (this.lastTo !== null && to !== this.lastTo) this.drop();
@@ -267,7 +287,7 @@ export default class SyncPanes extends View {
   // last item's when that goes to the same panes and has room.
   push(item, cx) {
     // Catch up first, so a change in panes drops older items, not this one.
-    this.watch();
+    this.watch(cx);
     if (this.stopped) return;
     const targets = this.targets();
     if (!targets.length) return;
@@ -291,7 +311,7 @@ export default class SyncPanes extends View {
     cx.spawn(async (cx) => {
       try {
         while (this.queue.length && !this.stopped) {
-          this.watch();
+          this.watch(cx);
           const item = this.queue.shift();
           if (!item || !this.alive(item.gen)) continue;
           if (item.paste) this.pasteEach(item.targets, cx);
@@ -365,8 +385,8 @@ export default class SyncPanes extends View {
 
   // A small pill: it has to hold the keyboard, so it can't go away, but it
   // stays out of the way. Drag it anywhere; the window remembers the spot.
-  render() {
-    this.watch();
+  render(cx) {
+    this.watch(cx);
     const t = theme();
     const n = this.targets().length;
     const live = this.handle.is_focused();
@@ -379,6 +399,7 @@ export default class SyncPanes extends View {
       : LABEL.paused;
     return h_flex().id("sync-panes").track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
       .on_click((_e, cx) => { this.resume(); cx.notify(); })
+      .on_mouse_down_out(() => { this.pressedAt = Date.now(); })
       .h(24).pl(10).pr(4).gap(6).items_center().rounded(12)
       .bg(t.popover).border_1().border_color(color).text_size(11.5).text_color(t.foreground)
       .child(div().w(6).h(6).rounded(3).bg(color)
