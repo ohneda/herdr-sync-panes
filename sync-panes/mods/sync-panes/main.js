@@ -9,10 +9,9 @@
 // Sync. Pausing (the keyboard went elsewhere), stopping, leaving the tab, a
 // change in which panes are targeted and a failed send all drop what's
 // still queued; a send already handed to send.py can't be called back. A failed
-// send also holds input until the pill is clicked. <prefix> <key> runs that
-// key's binding from keys.json instead of typing it; the prefix is read from
-// the binding of sync-panes.stop. Opened with mod.open:sync-panes; the stop
-// binding or the ✕ closes it.
+// send also holds input until the pill is clicked. The keys of a multi-key
+// binding in keys.json ("ctrl-t n") run that binding instead of being typed.
+// Opened with mod.open:sync-panes; sync-panes.stop or the ✕ closes it.
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
@@ -39,7 +38,7 @@ const SHIFT = 1, ALT = 2, CTRL = 4;
 // The most input one send.py run carries.
 const BATCH = 256;
 // Herdr applies a pane focus after the mod's own focus call, so after
-// moving focus (a paste, <prefix> h) the pill takes the keyboard back on
+// moving focus (a paste, a pane.go binding) the pill takes the keyboard back on
 // these delays, and losing it meanwhile isn't called a pause.
 const REGAIN_MS = [30, 120, 300];
 const SETTLE_MS = 500;
@@ -64,20 +63,27 @@ function sections() {
   return ["mod:sync-panes", `layout:${shared("layout")}`, "global"];
 }
 
-// The prefix: the first chord of sync-panes.stop's two-chord binding in the
-// sections that apply ("ctrl-t shift-e" -> "ctrl-t"), or null.
-function prefixKey() {
-  for (const section of sections()) {
-    const b = keys().find((k) => k.section === section && k.action === "sync-panes.stop" && k.keys.trim().split(/\s+/).length === 2);
-    if (b) return b.keys.trim().split(/\s+/)[0].toLowerCase();
-  }
-  return null;
+// A binding's keys as keystrokes ("ctrl-t shift-e" -> ["ctrl-t", "shift-e"]).
+function strokes(k) {
+  return k.keys.trim().toLowerCase().split(/\s+/);
 }
 
-// What `<prefix> <key>` does here: the most specific binding that applies.
-function bindingFor(chord) {
+// Do these keystrokes begin a multi-key binding that applies, with more to
+// come? ["ctrl-t"] does when "ctrl-t n" is bound.
+function begins(typed) {
+  const ss = sections();
+  return keys().some((k) => {
+    if (!ss.includes(k.section)) return false;
+    const s = strokes(k);
+    return s.length > typed.length && typed.every((t, i) => s[i] === t);
+  });
+}
+
+// What these keystrokes do here: the most specific binding that applies.
+function bindingFor(typed) {
+  const want = typed.join(" ");
   for (const section of sections()) {
-    const b = keys().find((k) => k.section === section && k.keys.trim().toLowerCase() === chord);
+    const b = keys().find((k) => k.section === section && strokes(k).join(" ") === want);
     if (b) return b.action;
   }
   return null;
@@ -171,7 +177,7 @@ export default class SyncPanes extends View {
     return ps.filter((p) => p.terminal);
   }
 
-  // Forgets everything queued and any half-typed prefix; sends in flight
+  // Forgets everything queued and any half-typed binding; sends in flight
   // see the new generation and don't go on.
   drop() {
     this.gen++;
@@ -187,7 +193,7 @@ export default class SyncPanes extends View {
   // Leaving the tab stops; losing the keyboard or a change in the target
   // panes drops what's queued. Runs on a timer and on every render.
   //
-  // Herdr runs keys.json bindings itself, so `<prefix> h` (pane.go) moves
+  // Herdr runs keys.json bindings itself, so a pane.go binding moves
   // the keyboard to a pane without the pill seeing a key. Losing it with no
   // press outside the pill since it last had it, to another pane of the
   // tab, is such a move: the pill takes the keyboard back and keeps
@@ -242,14 +248,20 @@ export default class SyncPanes extends View {
     cx.stop_propagation();
     if (this.stopped) return;
     const stroke = e.keystroke.toLowerCase();
+    // The keys of a multi-key binding are held, not typed, until they make
+    // up a whole binding or can't any more.
     if (this.pending) {
-      const prefix = this.pending;
+      const typed = [...this.pending, stroke];
       this.pending = null;
-      return this.prefixed(prefix, stroke, cx);
+      if (stroke === "escape") return;
+      if (begins(typed)) {
+        this.pending = typed;
+        return;
+      }
+      return this.sequence(typed, cx);
     }
-    const prefix = prefixKey();
-    if (prefix && stroke === prefix) {
-      this.pending = prefix;
+    if (begins([stroke])) {
+      this.pending = [stroke];
       return;
     }
     // After a failure nothing is typed until the pill is clicked.
@@ -262,12 +274,12 @@ export default class SyncPanes extends View {
     if (input) this.push({ input: [input] }, cx);
   }
 
-  // <prefix> <key>: that key's binding, as tmux runs its command instead of
-  // sending the key. An unbound key does nothing, and so does `terminal`
-  // (it means "let the program have the key", and there's no program here).
-  prefixed(prefix, stroke, cx) {
-    if (stroke === "escape") return;
-    const action = bindingFor(`${prefix} ${stroke}`);
+  // The keys of a multi-key binding: that binding, as tmux runs its command
+  // instead of sending the keys. Keys that match no binding do nothing, and
+  // neither does `terminal` (it means "let the program have the key", and
+  // there's no program here).
+  sequence(typed, cx) {
+    const action = bindingFor(typed);
     if (!action || action === "terminal" || action.startsWith("mod.open:sync-panes")) return;
     if (action === "sync-panes.stop") return this.stop();
     if (action.startsWith("send:")) return this.typeText(action.slice(5), cx);

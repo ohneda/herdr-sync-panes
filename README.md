@@ -6,7 +6,7 @@ A [Herdr](https://herdr.dev) mod: type once, into every terminal of a tab, like 
 
 - `ctrl-t e` starts syncing in the shown tab; a small "Sync N · <tab>" pill sits in the tab bar. That's this mod's default: tmux has no default key for `synchronize-panes`, so pick your own (below).
 - `ctrl-t shift-e` (or the pill's ✕) stops it. Showing another tab stops it too.
-- Your other prefix keys keep working, as in tmux: with Herdr's `ctrl-t n` bound to `tab.next`, it goes to the next tab instead of typing `n`.
+- Your multi-key bindings keep working, as tmux's prefix keys do: with `ctrl-t n` bound to `tab.next` in your `keys.json`, it goes to the next tab instead of typing `n`.
 - `ctrl-t a` types a literal `ctrl-t` into every terminal, like tmux's `send-prefix` (from the `mod:sync-panes` section of `keys.json`).
 - Cmd-V pastes the clipboard into every terminal.
 - What the pill shows is what it sends: when it says Paused, failed or is gone, nothing still queued is typed anywhere.
@@ -21,7 +21,7 @@ A [Herdr](https://herdr.dev) mod: type once, into every terminal of a tab, like 
 
 - **Cursors look inactive.** While syncing, no terminal has the keyboard, so Herdr draws every cursor hollow (□ rather than ■).
 - **No IME input.** Japanese and other composed text don't reach the pill; paste them with Cmd-V.
-- **A key right after a pane move goes to one pane.** Herdr runs `ctrl-t h` and the like itself; the pill takes the keyboard back a few tens of milliseconds later, and a key typed in between goes only to the pane you moved to.
+- **A key right after a pane move goes to one pane.** Herdr runs a pane-moving binding (`ctrl-t h` bound to `pane.go:left`) itself; the pill takes the keyboard back a few tens of milliseconds later, and a key typed in between goes only to the pane you moved to.
 - **`send:` bindings need a second line.** A `send:` binding in `global` types into no terminal while syncing; bind the chord again in `mod:sync-panes` to `sync-panes.send:<text>`, as `keys.json` does for `ctrl-t a`.
 - **Python 3, and tried on macOS only.** Typing needs Python 3 (`python3` or `python`; on Windows `py -3` first). On Linux, pasting is Super+V; on Windows, programs that ask for win32 input mode may not get keys right.
 
@@ -49,7 +49,7 @@ else
 fi
 ```
 
-Then merge [`sync-panes/keys.json`](sync-panes/keys.json) into `~/.config/herdr-app/keys.json`. Check that nothing else already uses those keys; if your prefix isn't `ctrl-t`, change it in every line. The mod takes its prefix from the `sync-panes.stop` binding, so nothing in `main.js` needs editing. Installing under another folder name means renaming `sync-panes` in `mod.json`'s `key`, in `main.js` (`mod:sync-panes`, `sync-panes.stop`, `mod.open:sync-panes`, `mods/sync-panes/send.py`) and in your keys.
+Then merge [`sync-panes/keys.json`](sync-panes/keys.json) into `~/.config/herdr-app/keys.json`. Check that nothing else already uses those keys, and pick others if it does: single keys (`cmd-shift-e`) or sequences (`ctrl-b e`) both work. The mod reads its bindings from `keys.json`, so nothing in `main.js` needs editing. Installing under another folder name means renaming `sync-panes` in `mod.json`'s `key`, in `main.js` (`mod:sync-panes`, `sync-panes.stop`, `mod.open:sync-panes`, `mods/sync-panes/send.py`) and in your keys.
 
 ## What it runs
 
