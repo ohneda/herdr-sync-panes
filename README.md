@@ -22,7 +22,7 @@ A [Herdr](https://herdr.dev) mod: type once, into every terminal of a tab, like 
 - **Cursors look inactive.** While syncing, no terminal has the keyboard, so Herdr draws every cursor hollow (□ rather than ■).
 - **No IME input.** Japanese and other composed text don't reach the pill; paste them with Cmd-V.
 - **A key right after a pane move goes to one pane.** Herdr runs a pane-moving binding (`ctrl-t h` bound to `pane.go:left`) itself; the pill takes the keyboard back a few tens of milliseconds later, and a key typed in between goes only to the pane you moved to.
-- **`send:` bindings need a second line.** A `send:` binding in `global` types into no terminal while syncing; bind the chord again in `mod:sync-panes` to `sync-panes.send:<text>`, as `keys.json` does for `ctrl-t a`.
+- **`send:` and `terminal` bindings need a second line.** While syncing, the pill has the keyboard, not a terminal: a `send:` binding in `global` types into no terminal, and the `terminal` section doesn't apply (`alt-left` bound there to `send:\u001bb` goes as a plain Alt+Left, and Cmd keys other than Cmd-V do nothing). Bind the key again in `mod:sync-panes` to `sync-panes.send:<text>`, as `keys.json` does for `ctrl-t a`.
 - **Python 3, and tried on macOS only.** Typing needs Python 3 (`python3` or `python`; on Windows `py -3` first). On Linux, pasting is Super+V; on Windows, programs that ask for win32 input mode may not get keys right.
 
 ## What Herdr would need
