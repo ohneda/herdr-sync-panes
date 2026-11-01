@@ -11,7 +11,8 @@
 // still queued; a send already handed to send.py can't be called back. A failed
 // send also holds input until the pill is clicked. The keys of a multi-key
 // binding in keys.json ("ctrl-t n") run that binding instead of being typed.
-// Opened with mod.open:sync-panes; sync-panes.stop or the ✕ closes it.
+// mod.open:sync-panes opens it and, again, closes it; so do sync-panes.stop
+// (a key that only stops) and the ✕.
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
@@ -63,7 +64,7 @@ function sections() {
   return ["mod:sync-panes", `layout:${shared("layout")}`, "global"];
 }
 
-// A binding's keys as keystrokes ("ctrl-t shift-e" -> ["ctrl-t", "shift-e"]).
+// A binding's keys as keystrokes ("ctrl-t e" -> ["ctrl-t", "e"]).
 function strokes(k) {
   return k.keys.trim().toLowerCase().split(/\s+/);
 }
@@ -289,8 +290,9 @@ export default class SyncPanes extends View {
   // there's no program here).
   sequence(typed, cx) {
     const action = bindingFor(typed);
-    if (!action || action === "terminal" || action.startsWith("mod.open:sync-panes")) return;
-    if (action === "sync-panes.stop") return this.stop();
+    if (!action || action === "terminal") return;
+    // Opening it again closes it, as Herdr's mod.open does.
+    if (action === "sync-panes.stop" || action.startsWith("mod.open:sync-panes")) return this.stop();
     if (action.startsWith("send:")) return this.typeText(action.slice(5), cx);
     // Moving between panes keeps syncing, as in tmux; an action that opens
     // a dialog leaves the focused pane as it was and keeps the keyboard.

@@ -1,6 +1,6 @@
 # Sync panes
 
-Type once, into every terminal of one tab: tmux's `synchronize-panes` for Herdr. `ctrl-t e` starts it, `ctrl-t shift-e` stops it, and a small pill sits in the tab bar while it's on. Your other key bindings keep working while it's on, multi-key ones included, as tmux's prefix keys do. This is a piece you add to your current layout, not a whole window.
+Type once, into every terminal of one tab: tmux's `synchronize-panes` for Herdr. `ctrl-t e` starts it and, pressed again, stops it, and a small pill sits in the tab bar while it's on. Your other key bindings keep working while it's on, multi-key ones included, as tmux's prefix keys do. This is a piece you add to your current layout, not a whole window.
 
 ![Sync panes](preview.png)
 
@@ -28,11 +28,11 @@ This file is the brief: enough to build Sync panes from an empty folder. The fil
 - Other Cmd shortcuts are ignored. IME composition doesn't reach it; paste Japanese and other composed text with Cmd-V.
 - **Paused**: clicking a terminal takes the keyboard; keys go only to that terminal, and nothing queued goes anywhere. Clicking the pill resumes. Cmd-V and moving panes with a binding move focus for a moment but don't pause.
 - **If a send fails** for any terminal, typing is held until you click the pill. Key bindings still work meanwhile.
-- **Multi-key bindings run, as tmux's prefix keys do.** Herdr itself runs the `keys.json` bindings it knows while the pill has the keyboard; the pill never sees those keys. With `ctrl-t n` bound to `tab.next`, it goes to the next tab (which ends syncing); `ctrl-t shift-e` stops. A plain `send:` binding would type into no terminal (the pill, not a terminal, has the keyboard), so the chord is bound again in `mod:sync-panes`, which wins while the pill has the keyboard, to `sync-panes.send:<text>`: `ctrl-t a` → `sync-panes.send:\u0014` types a literal Ctrl+T into every terminal, like tmux's `send-prefix`. Keys that start a multi-key binding but end up matching none reach the pill. It holds them while some binding still starts with them (looking in `mod:sync-panes`, then `layout:<shown layout>`, then `global`), then looks the whole sequence up and types nothing: an unbound one does nothing, nor does a `terminal` binding. Escape drops a half-typed one, and so do pause, resume, failure and stop.
+- **Multi-key bindings run, as tmux's prefix keys do.** Herdr itself runs the `keys.json` bindings it knows while the pill has the keyboard; the pill never sees those keys. With `ctrl-t n` bound to `tab.next`, it goes to the next tab (which ends syncing); `ctrl-t e` stops. A plain `send:` binding would type into no terminal (the pill, not a terminal, has the keyboard), so the chord is bound again in `mod:sync-panes`, which wins while the pill has the keyboard, to `sync-panes.send:<text>`: `ctrl-t a` → `sync-panes.send:\u0014` types a literal Ctrl+T into every terminal, like tmux's `send-prefix`. Keys that start a multi-key binding but end up matching none reach the pill. It holds them while some binding still starts with them (looking in `mod:sync-panes`, then `layout:<shown layout>`, then `global`), then looks the whole sequence up and types nothing: an unbound one does nothing, nor does a `terminal` binding. Escape drops a half-typed one, and so do pause, resume, failure and stop.
 - **Moving between panes keeps syncing**, as in tmux: when a binding moves the keyboard to another pane of the tab (`ctrl-t h`, `ctrl-t l`, a "last pane" binding) with no click since the pill last had it, the pill takes the keyboard back. A click on a pane pauses, and a binding that leaves the focused pane as it was (a rename dialog, the palette) leaves the keyboard where Herdr put it.
 - `sync-panes.send:` text (and a `send:` binding, should one reach the pill) is typed into every terminal when every character can be: printable characters, Enter (`\r`, `\n`), Tab, Escape and Ctrl+A–Z. Escape followed by one printable character (`\u001bb`) goes as Alt and that key (Shift too for a capital), the way a terminal sends Alt+B: the same bytes as the text in a plain terminal, and Alt+B rather than Esc then `b` in kitty mode. `\u001b[` and `\u001bO` stay Escape and text, since they start a key's own sequence. Anything else (NUL, Ctrl+\ ] ^ _, DEL) and nothing is sent; a warning says so.
 - Which keys the pill holds comes from `keys()`: the start of every multi-key binding in those sections. Rebinding in `keys.json` (`ctrl-b e`, or a single key such as `cmd-shift-e`) is all it takes; there's nothing to change in `main.js`.
-- `ctrl-t shift-e` or the ✕ stops it.
+- `ctrl-t e` again or the ✕ stops it: `mod.open` on an open mod closes it (Herdr 0.1.11). A key bound to `sync-panes.stop` stops it too, but only while the pill is open: with the mod not loaded, Herdr answers `unknown command "sync-panes.stop"`.
 - Drag the pill anywhere; Herdr remembers the spot (window `key: "sync-panes"`).
 
 ## Built from
@@ -43,8 +43,7 @@ This file is the brief: enough to build Sync panes from an empty folder. The fil
   ```json
   {
     "global": {
-      "ctrl-t e": "mod.open:sync-panes",
-      "ctrl-t shift-e": "sync-panes.stop"
+      "ctrl-t e": "mod.open:sync-panes"
     },
     "mod:sync-panes": {
       "ctrl-t a": "sync-panes.send:\u0014"
@@ -52,7 +51,7 @@ This file is the brief: enough to build Sync panes from an empty folder. The fil
   }
   ```
 
-  `sync-panes.stop` and `sync-panes.send:<text>` reach the mod through `nextCommand()` (as `"stop"` and `"send:<text>"`). Any keys work, single keys or sequences; the mod reads what's bound from `keys()`. Add a `mod:sync-panes` line for each `send:` binding you want to reach every terminal while syncing.
+  `sync-panes.send:<text>` (and `sync-panes.stop`, for a key that only stops) reach the mod through `nextCommand()` (as `"send:<text>"` and `"stop"`). Any keys work, single keys or sequences; the mod reads what's bound from `keys()`. Add a `mod:sync-panes` line for each `send:` binding you want to reach every terminal while syncing.
 - **A focusable view**: `cx.focus_handle()`, focused in `init`, and once more 300 ms later only if the pill hasn't had the keyboard yet (focusing during render isn't allowed). `track_focus` and `on_key_down` on the pill's root; `handle.is_focused()` decides Sync vs Paused.
 - **Taking the keyboard back** (`regain()`): Herdr applies `pane.focus` / `pane.go` after the mod's own `handle.focus()` in the same turn, so focusing right away loses. After a paste (if the pill had the keyboard), after a binding the pill ran that changed `focused().pane`, and when `watch()` sees a binding moved the keyboard to another pane, `cx.timer.after` tries again at 30, 120 and 300 ms, while the tab is the same and the pill doesn't have it, and calls `cx.notify()`: a focus handle changing doesn't redraw the pill by itself. The 300 ms watch timer also redraws whenever focus differs from what was last drawn, so Sync / Paused is never stale.
 - **One watch** (`watch(cx)`, on a 300 ms `cx.timer.every`, on every render, before every queued key and before every send): a different `focused().tab` stops; a different target set drops the queue. While the pill has the keyboard it notes `focused().pane` and the time. When it has lost it (outside the 500 ms after it moved focus itself): if `on_mouse_down_out` (a press anywhere outside the pill) came after that time, or `focused().pane` is the one noted, or not a target, it pauses and drops the queue; otherwise a binding moved panes, and it takes the keyboard back with `regain()`. Dropping bumps a generation number; queued items carry the generation they were made in and give up when it changed, when stopped, or when the tab changed.
@@ -103,5 +102,5 @@ This file is the brief: enough to build Sync panes from an empty folder. The fil
 - Zooming one shell makes the pill say "Sync 1" and only that shell gets keys; zooming a Files or preview pane makes it say "No terminals".
 - Killing one of the shells from outside and typing shows "Failed …"; nothing more is typed anywhere until the pill is clicked.
 - `ctrl-t a` types a literal Ctrl+T into both (in `cat`, macOS shows a `load:` line in each); an unbound `ctrl-t <key>` types nothing.
-- With the bindings moved to `ctrl-b` in `keys.json` only, `ctrl-b shift-e` stops it; with `sync-panes.stop` on a single key (`cmd-shift-e`), that key stops it.
-- `ctrl-t shift-e` and the ✕ both close the pill, and normal typing goes to one terminal again.
+- With the bindings moved to `ctrl-b` in `keys.json` only, `ctrl-b e` starts and stops it; with `mod.open:sync-panes` on a single key (`cmd-shift-e`), that key does.
+- `ctrl-t e` (pressed again) and the ✕ both close the pill, and normal typing goes to one terminal again.

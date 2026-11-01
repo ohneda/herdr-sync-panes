@@ -5,7 +5,7 @@ A [Herdr](https://herdr.dev) mod: type once, into every terminal of a tab, like 
 ![Sync panes](sync-panes/preview.png)
 
 - `ctrl-t e` starts syncing in the shown tab; a small "Sync N · <tab>" pill sits in the tab bar. That's this mod's default: tmux has no default key for `synchronize-panes`, so pick your own (below).
-- `ctrl-t shift-e` (or the pill's ✕) stops it. Showing another tab stops it too.
+- `ctrl-t e` again (or the pill's ✕) stops it: Herdr's `mod.open` closes a mod that's already open. Showing another tab stops it too.
 - Your multi-key bindings keep working, as tmux's prefix keys do: with `ctrl-t n` bound to `tab.next` in your `keys.json`, it goes to the next tab instead of typing `n`.
 - `ctrl-t a` types a literal `ctrl-t` into every terminal, like tmux's `send-prefix` (from the `mod:sync-panes` section of `keys.json`).
 - Cmd-V pastes the clipboard into every terminal.
@@ -49,7 +49,7 @@ else
 fi
 ```
 
-Then merge [`sync-panes/keys.json`](sync-panes/keys.json) into `~/.config/herdr-app/keys.json`. Check that nothing else already uses those keys, and pick others if it does: single keys (`cmd-shift-e`) or sequences (`ctrl-b e`) both work. The mod reads its bindings from `keys.json`, so nothing in `main.js` needs editing. Installing under another folder name means renaming `sync-panes` in `mod.json`'s `key`, in `main.js` (`mod:sync-panes`, `sync-panes.stop`, `mod.open:sync-panes`, `mods/sync-panes/send.py`) and in your keys.
+Then merge [`sync-panes/keys.json`](sync-panes/keys.json) into `~/.config/herdr-app/keys.json`. Check that nothing else already uses those keys, and pick others if it does: single keys (`cmd-shift-e`) or sequences (`ctrl-b e`) both work. To stop with a key of its own, bind it to `sync-panes.stop` (it only does something while syncing; otherwise Herdr says the command is unknown). The mod reads its bindings from `keys.json`, so nothing in `main.js` needs editing. Installing under another folder name means renaming `sync-panes` in `mod.json`'s `key`, in `main.js` (`mod:sync-panes`, `sync-panes.stop`, `mod.open:sync-panes`, `mods/sync-panes/send.py`) and in your keys.
 
 ## What it runs
 
