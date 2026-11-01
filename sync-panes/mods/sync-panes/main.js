@@ -99,12 +99,21 @@ function runAction(action) {
 }
 
 // A send: binding's text as input, or null when any character can't be
-// typed faithfully (NUL, ctrl+\ ] ^ _, DEL): then nothing is sent.
+// typed faithfully (NUL, ctrl+\ ] ^ _, DEL): then nothing is sent. Escape
+// and one printable character ("\u001bb") is Alt and that key, as a terminal
+// sends it: the same bytes as the text in a plain terminal, Alt+b (not Esc,
+// then b) in kitty mode. "\u001b[" and "\u001bO" start a key's own escape
+// sequence, so they stay Escape and text.
 function sendItems(text) {
   const out = [];
-  for (const ch of text) {
-    const code = ch.codePointAt(0);
-    if (ch === "\r" || ch === "\n") out.push({ key: "enter", mods: 0 });
+  const chars = [...text];
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i], code = ch.codePointAt(0), next = chars[i + 1];
+    if (ch === "\u001b" && next && /^[\x21-\x7e]$/.test(next) && next !== "[" && next !== "O") {
+      const upper = /^[A-Z]$/.test(next);
+      out.push({ key: next.toLowerCase(), mods: ALT | (upper ? SHIFT : 0) });
+      i++;
+    } else if (ch === "\r" || ch === "\n") out.push({ key: "enter", mods: 0 });
     else if (ch === "\t") out.push({ key: "tab", mods: 0 });
     else if (ch === "\u001b") out.push({ key: "esc", mods: 0 });
     else if (code >= 1 && code <= 26) out.push({ key: String.fromCharCode(code + 96), mods: CTRL });
