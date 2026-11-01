@@ -20,10 +20,9 @@ A [Herdr](https://herdr.dev) mod: type once, into every terminal of a tab, like 
 ## Limits
 
 - **Cursors look inactive.** While syncing, no terminal has the keyboard, so Herdr draws every cursor hollow (□ rather than ■).
-- **No IME input.** Japanese and other composed text don't reach the pill; paste them with Cmd-V.
+- **No IME input.** Japanese and other composed text don't reach the pill; paste them with Cmd-V. Option follows Herdr's `option_as_alt` (Option+¥ types `\` on a JIS keyboard), but dead keys (Option+E, then E) don't compose.
 - **A key right after a pane move goes to one pane.** Herdr runs a pane-moving binding (`ctrl-t h` bound to `pane.go:left`) itself; the pill takes the keyboard back a few tens of milliseconds later, and a key typed in between goes only to the pane you moved to.
 - **`send:` and `terminal` bindings need a second line.** While syncing, the pill has the keyboard, not a terminal: a `send:` binding in `global` or a `layout:` section types into no terminal, and the `terminal` section doesn't apply (`alt-left` bound there to `send:\u001bb` goes as a plain Alt+Left, and Cmd keys other than Cmd-V do nothing). Bind the key in `mod:sync-panes` too, to `sync-panes.send:<text>`; `keys.json` does this for `ctrl-t a`.
-- **Option is always Alt.** Herdr's `option_as_alt` setting doesn't apply to the pill: Option+key goes as Alt+key, so a character typed with Option (`\` with Option+¥ on a JIS keyboard) isn't typed. Paste it with Cmd-V.
 - **Python 3, and tried on macOS only.** Typing needs Python 3 (`python3` or `python`; on Windows `py -3` first). On Linux, pasting is Super+V, and on Windows Win+V (which Windows keeps for its clipboard history); on Windows, programs that ask for win32 input mode may not get keys right.
 
 ## What Herdr would need
@@ -32,7 +31,7 @@ This mod works around what a mod can't do today. The real thing would be synchro
 
 Short of that, two things would let a mod get close:
 
-- a way for a mod to see the input a terminal receives. You could keep typing in the pane, so the pill, the hollow cursors, the IME gap, the pane-move gap, the Option gap and the second lines for `send:` and `terminal` bindings would all go;
+- a way for a mod to see the input a terminal receives. You could keep typing in the pane, so the pill, the hollow cursors, the IME gap, the pane-move gap and the second lines for `send:` and `terminal` bindings would all go;
 - a way for a mod to type into a given terminal: text and keys, in order, without moving focus, resizing, touching the clipboard or waiting for `hc`'s ~3 s of quiet. `send.py`, and with it Python, would go.
 
 See [`sync-panes/RECIPE.md`](sync-panes/RECIPE.md) for exactly what it does, how it's built and its limits.
@@ -54,7 +53,7 @@ Then merge [`sync-panes/keys.json`](sync-panes/keys.json) into `~/.config/herdr-
 
 ## What it runs
 
-Python (`send.py`), which runs `hc connect` to type into the terminals (and `hc keys` for the rare key it can't encode itself). It reads no files but the one it writes for `send.py`, and makes no network requests.
+Python (`send.py`), which runs `hc connect` to type into the terminals (and `hc keys` for the rare key it can't encode itself). On macOS, every 2 s while syncing, it reads `option_as_alt` from Herdr's `settings.json` and, when that is `"auto"`, runs `defaults read` for the keyboard layout. It reads no other files but the one it writes for `send.py`, and makes no network requests.
 
 ## License
 

@@ -16,6 +16,7 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
+import * as fs from "fs/promises";
 import { exec, appHome, writeTextFile, run, panes, focused, spaces, keys, commands, shared, theme, props, closeOverlay, notify, nextCommand, window } from "herdr";
 
 const LABEL = {
@@ -43,11 +44,29 @@ const BATCH = 256;
 // these delays, and losing it meanwhile isn't called a pause.
 const REGAIN_MS = [30, 120, 300];
 const SETTLE_MS = 500;
+// How often settings.json's option_as_alt (and, for "auto", the keyboard
+// layout) is read again while syncing: Herdr applies changes at once.
+const OPTION_MS = 2000;
+// The macOS layouts where Herdr's option_as_alt "auto" sends Option as Alt.
+const ALT_LAYOUTS = ["com.apple.keylayout.US", "com.apple.keylayout.USInternational-PC", "com.apple.keylayout.ABC", "com.apple.keylayout.ABC-India"];
 
 // Ways to start Python 3, in the order tried. On Windows `py -3` goes
 // first: `python3` there may be the Store's stand-in, which opens the Store.
 function pythons() {
   return window().platform === "windows" ? [["py", "-3"], ["python"], ["python3"]] : [["python3"], ["python"]];
+}
+
+// Does Option act as Alt, as it does in Herdr's terminals? macOS only:
+// settings.json's option_as_alt, "on", "off" or "auto" (the default: Alt on
+// the layouts above). Elsewhere Alt is always Alt.
+async function optionIsAlt() {
+  let mode = "auto";
+  try { mode = JSON.parse(await fs.readFile(`${appHome()}/settings.json`, "utf8")).option_as_alt ?? "auto"; } catch {}
+  if (mode === "on") return true;
+  if (mode === "off") return false;
+  const r = await exec("/usr/bin/defaults", ["read", "com.apple.HIToolbox", "AppleCurrentKeyboardLayoutInputSourceID"]);
+  if (r.code !== 0) throw new Error(r.stderr || "defaults failed");
+  return ALT_LAYOUTS.includes(r.stdout.trim());
 }
 
 // One key as a send.py key name, or null when it has none.
@@ -139,6 +158,12 @@ export default class SyncPanes extends View {
     this.livePane = null;
     this.liveAt = 0;
     this.pressedAt = 0;
+    // Option as Alt until settings.json and the layout say otherwise.
+    this.optionAlt = true;
+    if (window()?.platform === "macos") {
+      this.readOption(cx);
+      cx.timer.every(OPTION_MS, (cx) => this.readOption(cx));
+    }
     this.handle = cx.focus_handle();
     this.handle.focus();
     // One more try if the first didn't take, unless the pill has already
@@ -166,6 +191,15 @@ export default class SyncPanes extends View {
         else if (command.startsWith("send:")) this.typeText(command.slice(5), cx);
         cx.notify();
       }
+    });
+  }
+
+  // Reads option_as_alt again; on an error the last answer stays.
+  readOption(cx) {
+    if (this.readingOption || this.stopped) return;
+    this.readingOption = true;
+    cx.spawn(async () => {
+      try { this.optionAlt = await optionIsAlt(); } catch {} finally { this.readingOption = false; }
     });
   }
 
@@ -242,11 +276,17 @@ export default class SyncPanes extends View {
 
   // A KeyEvent as input: { key, mods }, { text }, or null. What a key
   // types without Ctrl or Alt (letters, symbols, Japanese) goes as text.
+  // When Option isn't Alt (option_as_alt), what Option types on a character
+  // key goes as text too, as in Herdr's terminals: Option+¥ is "\" on JIS.
   translate(e) {
     const m = e.modifiers;
     const base = e.key;
+    const named = NAMED[base] || /^f([1-9]|1[0-2])$/.test(base);
+    if (m.alt && !m.control && !named && !this.optionAlt) {
+      return e.key_char ? { text: e.key_char } : null;
+    }
     const mods = (m.shift ? SHIFT : 0) | (m.alt ? ALT : 0) | (m.control ? CTRL : 0);
-    if (m.control || m.alt || NAMED[base] || /^f([1-9]|1[0-2])$/.test(base)) {
+    if (m.control || m.alt || named) {
       const name = keyName(base);
       return name ? { key: name, mods } : null;
     }
