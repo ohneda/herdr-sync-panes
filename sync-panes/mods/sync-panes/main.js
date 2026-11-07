@@ -47,6 +47,13 @@ const SETTLE_MS = 500;
 // How often settings.json's option_as_alt (and, for "auto", the keyboard
 // layout) is read again while syncing: Herdr applies changes at once.
 const OPTION_MS = 2000;
+// Tab and Shift-Tab: GPUI runs a key binding before key-down handlers, and
+// the window binds Tab to "focus the next tab stop", so a plain on_key_down
+// never sees Tab and the pill loses the keyboard (sync pauses). Binding them
+// in the pill's own key context, which is deeper, wins over that.
+const KEY_CONTEXT = "SyncPanes";
+const TAB_ACTIONS = { "sync-panes-tab": "tab", "sync-panes-shift-tab": "shift-tab" };
+
 // The macOS layouts where Herdr's option_as_alt "auto" sends Option as Alt.
 const ALT_LAYOUTS = ["com.apple.keylayout.US", "com.apple.keylayout.USInternational-PC", "com.apple.keylayout.ABC", "com.apple.keylayout.ABC-India"];
 
@@ -164,6 +171,7 @@ export default class SyncPanes extends View {
       this.readOption(cx);
       cx.timer.every(OPTION_MS, (cx) => this.readOption(cx));
     }
+    cx.bind_keys(Object.entries(TAB_ACTIONS).map(([action, keystroke]) => ({ keystroke, action, context: KEY_CONTEXT })));
     this.handle = cx.focus_handle();
     this.handle.focus();
     // One more try if the first didn't take, unless the pill has already
@@ -294,10 +302,19 @@ export default class SyncPanes extends View {
     return ch ? { text: ch } : null;
   }
 
-  key(e, cx) {
+  // Tab or Shift-Tab, from the pill's own binding, as the key it is.
+  tabKey(stroke, cx) {
+    this.tabActionAt = Date.now();
+    const shift = stroke === "shift-tab";
+    this.key({ key: "tab", keystroke: stroke, modifiers: { shift, alt: false, control: false, platform: false, function: false } }, cx, true);
+  }
+
+  key(e, cx, fromAction = false) {
     cx.stop_propagation();
     if (this.stopped) return;
     const stroke = e.keystroke.toLowerCase();
+    // The same Tab arriving again as a key event after its action: once is enough.
+    if (!fromAction && (stroke === "tab" || stroke === "shift-tab") && Date.now() - (this.tabActionAt ?? 0) < 100) return;
     // The keys of a multi-key binding are held, not typed, until they make
     // up a whole binding or can't any more.
     if (this.pending) {
@@ -484,7 +501,9 @@ export default class SyncPanes extends View {
       : !n ? LABEL.none
       : live ? LABEL.sync(n, name)
       : LABEL.paused;
-    return h_flex().id("sync-panes").track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
+    let pill = h_flex().id("sync-panes").key_context(KEY_CONTEXT).track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx));
+    for (const [action, stroke] of Object.entries(TAB_ACTIONS)) pill = pill.on_action(action, (_e, cx) => this.tabKey(stroke, cx));
+    return pill
       .on_click((_e, cx) => { this.resume(); cx.notify(); })
       .on_mouse_down_out(() => { this.pressedAt = Date.now(); })
       .h(24).pl(10).pr(4).gap(6).items_center().rounded(12)
